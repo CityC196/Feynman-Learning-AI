@@ -25,6 +25,9 @@ $files = @(
   "admin.js",
   "Dockerfile",
   ".dockerignore",
+  "AGENT.md",
+  "README.md",
+  "PRODUCT.md",
   "DEPLOYMENT.md",
   "SERVER_HANDOFF.md",
   ".env.example",
@@ -61,7 +64,7 @@ sleep 3
 curl -fsS 'http://127.0.0.1:5173/api/health'
 "@
 
-  $remoteScript | ssh -i $KeyPath "$User@$HostName" "bash -s"
+  ($remoteScript -replace "`r`n", "`n") | ssh -i $KeyPath "$User@$HostName" "tr -d '\r' | bash -s"
   Write-Host "Deployment completed: https://ai-assist-interview.com"
 }
 finally {

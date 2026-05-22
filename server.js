@@ -12,8 +12,9 @@ const ZHIPU_MODEL = process.env.ZHIPU_MODEL || "glm-4-flash-250414";
 const ZHIPU_VISION_MODEL = process.env.ZHIPU_VISION_MODEL || "glm-4.5v";
 const ZHIPU_ENDPOINT =
   process.env.ZHIPU_ENDPOINT || "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-const MAX_JSON_BYTES = 8_000_000;
+const MAX_JSON_BYTES = Number(process.env.MAX_JSON_BYTES || 50_000_000);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_FEEDBACK_IMAGES = 6;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DATA_FILE = process.env.DATA_FILE || path.join(DATA_DIR, "research-store.json");
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
@@ -428,21 +429,21 @@ function createFeedback(payload, request) {
   const now = new Date().toISOString();
   const participant = requireParticipant(request);
   const message = stringOrDefault(payload?.message, "").slice(0, 4000);
-  const imageDataUrl = stringOrDefault(payload?.imageDataUrl, "");
+  const imageDataUrls = normalizeFeedbackImageDataUrls(payload);
 
-  if (!message && !imageDataUrl) {
+  if (!message && !imageDataUrls.length) {
     throw httpError(400, "请先写下反馈内容，或粘贴一张问题截图。");
   }
 
-  if (imageDataUrl) {
-    validateImageDataUrl(imageDataUrl);
-  }
+  imageDataUrls.forEach(validateImageDataUrl);
 
   const feedback = {
     id: createId("feedback"),
     message,
-    imageDataUrl,
-    imageMimeType: imageDataUrl ? getImageDataUrlMimeType(imageDataUrl) : "",
+    imageDataUrl: imageDataUrls[0] || "",
+    imageDataUrls,
+    imageMimeType: imageDataUrls[0] ? getImageDataUrlMimeType(imageDataUrls[0]) : "",
+    imageMimeTypes: imageDataUrls.map(getImageDataUrlMimeType),
     context: normalizeFeedbackContext(payload?.context),
     participantId: participant.id,
     participantCode: participant.publicCode,
@@ -456,6 +457,16 @@ function createFeedback(payload, request) {
     ok: true,
     feedbackId: feedback.id,
   };
+}
+
+function normalizeFeedbackImageDataUrls(payload) {
+  const urls = Array.isArray(payload?.imageDataUrls) ? payload.imageDataUrls : [];
+  const legacyUrl = stringOrDefault(payload?.imageDataUrl, "");
+  const normalized = [...urls, legacyUrl]
+    .map((item) => stringOrDefault(item, ""))
+    .filter(Boolean)
+    .slice(0, MAX_FEEDBACK_IMAGES);
+  return Array.from(new Set(normalized));
 }
 
 function getParticipantRecords(participantId) {
@@ -533,7 +544,13 @@ function getAdminRecords() {
       id: feedback.id,
       message: feedback.message,
       imageDataUrl: feedback.imageDataUrl,
+      imageDataUrls: Array.isArray(feedback.imageDataUrls)
+        ? feedback.imageDataUrls
+        : feedback.imageDataUrl
+          ? [feedback.imageDataUrl]
+          : [],
       imageMimeType: feedback.imageMimeType,
+      imageMimeTypes: Array.isArray(feedback.imageMimeTypes) ? feedback.imageMimeTypes : [],
       context: feedback.context,
       participantCode:
         feedback.participantCode ||
@@ -594,12 +611,18 @@ function normalizeStoredObservations(items) {
 
 function normalizeFeedbackContext(context) {
   const task = context?.task && typeof context.task === "object" ? normalizeTask(context.task) : null;
+  const messages = normalizeMessages(context?.messages);
 
   return {
     screen: stringOrDefault(context?.screen, "").slice(0, 60),
     url: stringOrDefault(context?.url, "").slice(0, 300),
     userAgent: stringOrDefault(context?.userAgent, "").slice(0, 300),
     task,
+    messages,
+    observations: normalizeStoredObservations(context?.observations),
+    report: context?.report && typeof context.report === "object" ? copyJson(context.report) : null,
+    turn: Number(context?.turn || countUserMessages(messages)),
+    libraryId: stringOrDefault(context?.libraryId, "").slice(0, 120),
   };
 }
 

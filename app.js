@@ -23,6 +23,7 @@ const state = {
 };
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_FEEDBACK_IMAGES = 6;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 let selectedImageDataUrl = "";
 
@@ -33,6 +34,7 @@ const elements = {
   libraryScreen: document.querySelector("#libraryScreen"),
   lectureButton: document.querySelector("#lectureButton"),
   libraryButton: document.querySelector("#libraryButton"),
+  sidebarConversationList: document.querySelector("#sidebarConversationList"),
   feedbackButton: document.querySelector("#feedbackButton"),
   saveNotice: document.querySelector("#saveNotice"),
   stageLabel: document.querySelector("#stageLabel"),
@@ -46,6 +48,7 @@ const elements = {
   conceptModeCard: document.querySelector("#conceptModeCard"),
   problemModeCard: document.querySelector("#problemModeCard"),
   sessionSummary: document.querySelector("#sessionSummary"),
+  lectureTopicBanner: document.querySelector("#lectureTopicBanner"),
   conversation: document.querySelector("#conversation"),
   replyForm: document.querySelector("#replyForm"),
   replyInput: document.querySelector("#replyInput"),
@@ -53,13 +56,8 @@ const elements = {
   imageToolButton: document.querySelector("#imageToolButton"),
   submitReplyButton: document.querySelector("#submitReplyButton"),
   reportButton: document.querySelector("#reportButton"),
-  saveDraftButton: document.querySelector("#saveDraftButton"),
-  resetButton: document.querySelector("#resetButton"),
-  editSetupButton: document.querySelector("#editSetupButton"),
   saveReportButton: document.querySelector("#saveReportButton"),
   continueButton: document.querySelector("#continueButton"),
-  sampleConceptButton: document.querySelector("#sampleConceptButton"),
-  sampleProblemButton: document.querySelector("#sampleProblemButton"),
   focusList: document.querySelector("#focusList"),
   reportPanel: document.querySelector("#reportPanel"),
   loadingState: document.querySelector("#loadingState"),
@@ -94,7 +92,7 @@ const elements = {
   feedbackModal: document.querySelector("#feedbackModal"),
   feedbackMessageInput: document.querySelector("#feedbackMessageInput"),
   feedbackImageInput: document.querySelector("#feedbackImageInput"),
-  feedbackImagePreview: document.querySelector("#feedbackImagePreview"),
+  feedbackImagePreviewList: document.querySelector("#feedbackImagePreviewList"),
   feedbackImageEmptyState: document.querySelector("#feedbackImageEmptyState"),
   feedbackStatus: document.querySelector("#feedbackStatus"),
   feedbackError: document.querySelector("#feedbackError"),
@@ -111,7 +109,7 @@ const elements = {
 
 let saveNoticeTimer = 0;
 let activeInsertTarget = null;
-let feedbackImageDataUrl = "";
+let feedbackImageDataUrls = [];
 
 elements.taskForm.addEventListener("submit", startSession);
 elements.replyForm.addEventListener("submit", submitReply);
@@ -119,13 +117,8 @@ elements.reportButton.addEventListener("click", finishSession);
 elements.lectureButton.addEventListener("click", resetSession);
 elements.libraryButton.addEventListener("click", openLibrary);
 elements.feedbackButton.addEventListener("click", openFeedbackModal);
-elements.saveDraftButton.addEventListener("click", () => saveCurrentToLibrary({ requireReport: false }));
-elements.resetButton.addEventListener("click", resetSession);
-elements.editSetupButton.addEventListener("click", editSetup);
 elements.saveReportButton.addEventListener("click", () => saveCurrentToLibrary({ requireReport: true }));
 elements.continueButton.addEventListener("click", continueLecture);
-elements.sampleConceptButton.addEventListener("click", fillConceptSample);
-elements.sampleProblemButton.addEventListener("click", fillProblemSample);
 elements.taskForm.addEventListener("input", updateSetupPreview);
 elements.taskForm.addEventListener("change", updateSetupPreview);
 elements.taskFormulaToolButton.addEventListener("click", () => openFormulaModal(elements.taskContent));
@@ -157,6 +150,8 @@ elements.feedbackModal.addEventListener("click", closeModalOnBackdrop);
 document.addEventListener("paste", handleImagePaste);
 elements.librarySearch.addEventListener("input", updateLibrarySearch);
 elements.libraryList.addEventListener("click", selectLibraryRecord);
+elements.sidebarConversationList.addEventListener("click", loadSidebarConversation);
+elements.sidebarConversationList.addEventListener("contextmenu", deleteSidebarConversation);
 elements.libraryLoadButton.addEventListener("click", loadSelectedLibraryRecord);
 elements.libraryDeleteButton.addEventListener("click", deleteSelectedLibraryRecord);
 document
@@ -278,6 +273,7 @@ function appendUserMessage(text) {
   renderConversation();
   updateTurnCount();
   saveSession();
+  saveCurrentToLibrary({ silent: true });
 }
 
 function mergeObservations(newItems, resolvedIds) {
@@ -374,12 +370,12 @@ function handleImageSelection(event) {
 }
 
 function handleImagePaste(event) {
-  const file = getClipboardImageFile(event.clipboardData);
-  if (!file) return;
+  const files = getClipboardImageFiles(event.clipboardData);
+  if (!files.length) return;
 
   if (!elements.feedbackModal.hidden) {
     event.preventDefault();
-    loadFeedbackImageFile(file, { source: "paste" });
+    loadFeedbackImageFiles(files, { source: "paste" });
     return;
   }
 
@@ -391,7 +387,7 @@ function handleImagePaste(event) {
   }
 
   event.preventDefault();
-  loadImageFile(file, { source: pasteTarget ? "direct-paste" : "paste" });
+  loadImageFile(files[0], { source: pasteTarget ? "direct-paste" : "paste" });
 }
 
 function getImagePasteTarget(target) {
@@ -400,14 +396,16 @@ function getImagePasteTarget(target) {
   return null;
 }
 
-function getClipboardImageFile(clipboardData) {
+function getClipboardImageFiles(clipboardData) {
   const files = Array.from(clipboardData?.files || []);
-  const file = files.find((item) => item.type.startsWith("image/"));
-  if (file) return file;
+  const imageFiles = files.filter((item) => item.type.startsWith("image/"));
+  if (imageFiles.length) return imageFiles;
 
   const items = Array.from(clipboardData?.items || []);
-  const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
-  return imageItem?.getAsFile() || null;
+  return items
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
 }
 
 function loadImageFile(file, options = {}) {
@@ -655,42 +653,59 @@ function closeFeedbackModal() {
 }
 
 function handleFeedbackImageSelection(event) {
-  loadFeedbackImageFile(event.target.files?.[0] || null);
+  loadFeedbackImageFiles(event.target.files || []);
 }
 
-function loadFeedbackImageFile(file, options = {}) {
+function loadFeedbackImageFiles(files, options = {}) {
   clearFeedbackMessages();
-  clearFeedbackImage();
+  const incomingFiles = Array.from(files || []);
 
-  if (!file) return;
+  if (!incomingFiles.length) return;
+  if (feedbackImageDataUrls.length + incomingFiles.length > MAX_FEEDBACK_IMAGES) {
+    showFeedbackError(`最多上传 ${MAX_FEEDBACK_IMAGES} 张截图。请先移除部分截图后再添加。`);
+    elements.feedbackImageInput.value = "";
+    return;
+  }
 
-  if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+  const invalidType = incomingFiles.find((file) => !ALLOWED_IMAGE_TYPES.has(file.type));
+  if (invalidType) {
     showFeedbackError("请选择 png、jpg、jpeg 或 webp 图片。");
     elements.feedbackImageInput.value = "";
     return;
   }
 
-  if (file.size > MAX_IMAGE_BYTES) {
+  const oversized = incomingFiles.find((file) => file.size > MAX_IMAGE_BYTES);
+  if (oversized) {
     showFeedbackError("图片不能超过 5MB。可以先裁剪或压缩后再上传。");
     elements.feedbackImageInput.value = "";
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = () => {
-    feedbackImageDataUrl = String(reader.result || "");
-    elements.feedbackImagePreview.src = feedbackImageDataUrl;
-    elements.feedbackImagePreview.hidden = false;
-    elements.feedbackImageEmptyState.hidden = true;
-    elements.removeFeedbackImageButton.disabled = false;
-    if (options.source === "paste") {
-      showFeedbackStatus("已粘贴截图。");
-    }
-  };
-  reader.onerror = () => {
-    showFeedbackError("图片读取失败，请换一张图片再试。");
-  };
-  reader.readAsDataURL(file);
+  Promise.all(incomingFiles.map(readFileAsDataUrl))
+    .then((dataUrls) => {
+      feedbackImageDataUrls.push(...dataUrls.filter(Boolean));
+      renderFeedbackImagePreviews();
+      if (options.source === "paste") {
+        showFeedbackStatus(`已粘贴 ${incomingFiles.length} 张截图。`);
+      } else {
+        showFeedbackStatus(`已添加 ${incomingFiles.length} 张截图。`);
+      }
+    })
+    .catch(() => {
+      showFeedbackError("图片读取失败，请换一张图片再试。");
+    })
+    .finally(() => {
+      elements.feedbackImageInput.value = "";
+    });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 async function submitFeedback() {
@@ -701,7 +716,7 @@ async function submitFeedback() {
   }
 
   const message = sanitize(elements.feedbackMessageInput.value);
-  if (!message && !feedbackImageDataUrl) {
+  if (!message && !feedbackImageDataUrls.length) {
     flashMissingInput([elements.feedbackMessageInput]);
     showFeedbackError("请写下反馈内容，或粘贴一张问题截图。");
     return;
@@ -714,13 +729,8 @@ async function submitFeedback() {
       "/api/feedback",
       {
         message,
-        imageDataUrl: feedbackImageDataUrl,
-        context: {
-          screen: state.screen,
-          url: window.location.href,
-          userAgent: navigator.userAgent,
-          task: state.task,
-        },
+        imageDataUrls: feedbackImageDataUrls,
+        context: buildFeedbackContext(),
       },
       { headers: participantHeaders() },
     );
@@ -735,20 +745,52 @@ async function submitFeedback() {
   }
 }
 
+function buildFeedbackContext() {
+  loadLibrary();
+  const activeRecord = state.screen === "library" ? getActiveLibraryRecord() : null;
+  return {
+    screen: state.screen,
+    url: window.location.href,
+    userAgent: navigator.userAgent,
+    task: copyValue(activeRecord?.task || state.task),
+    messages: copyValue(activeRecord?.messages || state.messages),
+    observations: copyValue(activeRecord?.observations || state.observations),
+    report: copyValue(activeRecord?.report || state.report),
+    turn: Number(activeRecord?.turn || state.turn || 0),
+    libraryId: activeRecord?.id || state.libraryId || "",
+  };
+}
+
 function clearFeedbackImage() {
-  feedbackImageDataUrl = "";
+  feedbackImageDataUrls = [];
   elements.feedbackImageInput.value = "";
-  elements.feedbackImagePreview.hidden = true;
-  elements.feedbackImagePreview.removeAttribute("src");
+  elements.feedbackImagePreviewList.innerHTML = "";
+  elements.feedbackImagePreviewList.hidden = true;
   elements.feedbackImageEmptyState.hidden = false;
   elements.removeFeedbackImageButton.disabled = true;
+}
+
+function renderFeedbackImagePreviews() {
+  elements.feedbackImagePreviewList.hidden = !feedbackImageDataUrls.length;
+  elements.feedbackImageEmptyState.hidden = Boolean(feedbackImageDataUrls.length);
+  elements.removeFeedbackImageButton.disabled = !feedbackImageDataUrls.length;
+  elements.feedbackImagePreviewList.innerHTML = feedbackImageDataUrls
+    .map(
+      (dataUrl, index) => `
+        <figure class="feedback-preview-item">
+          <img src="${escapeHtml(dataUrl)}" alt="反馈截图 ${index + 1}" />
+          <figcaption>截图 ${index + 1}</figcaption>
+        </figure>
+      `,
+    )
+    .join("");
 }
 
 function setFeedbackBusy(isBusy, message = "") {
   elements.submitFeedbackButton.disabled = isBusy;
   elements.feedbackMessageInput.disabled = isBusy;
   elements.feedbackImageInput.disabled = isBusy;
-  elements.removeFeedbackImageButton.disabled = isBusy || !feedbackImageDataUrl;
+  elements.removeFeedbackImageButton.disabled = isBusy || !feedbackImageDataUrls.length;
   if (message) showFeedbackStatus(message);
 }
 
@@ -863,7 +905,7 @@ async function syncLibraryRecord(record, options = {}) {
         headers: participantHeaders(),
       },
     );
-    if (!options.silent) showSaveNotice("已保存到个人知识库，并同步到调研后台。");
+    if (!options.silent) showSaveNotice("已保存到对话记录，并同步到调研后台。");
   } catch (error) {
     if (!options.silent) showSaveNotice(`已保存在本机，但同步后台失败：${error.message || "网络异常"}`);
   } finally {
@@ -942,10 +984,11 @@ function switchScreen(screen) {
           ? "正式讲解"
           : screen === "report"
             ? "诊断报告"
-            : "个人知识库";
+            : "对话记录";
   }
   updateTurnCount();
   updateSaveButtons();
+  renderSidebarConversations();
 }
 
 function renderSessionSummary() {
@@ -960,10 +1003,24 @@ function renderSessionSummary() {
       <strong>模式</strong>
       ${escapeHtml(state.task.taskType)}
     </div>
-    <div class="summary-item">
-      <strong>${state.task.taskType === "题目讲解" ? "题目" : "知识点"}</strong>
-      ${escapeHtml(state.task.taskContent)}
+  `;
+  renderLectureTopicBanner();
+}
+
+function renderLectureTopicBanner() {
+  if (!state.task) {
+    elements.lectureTopicBanner.innerHTML = "";
+    return;
+  }
+
+  const topicLabel = state.task.taskType === "题目讲解" ? "题目" : "知识点";
+  elements.lectureTopicBanner.innerHTML = `
+    <div class="lecture-topic-meta">
+      <span>${escapeHtml(state.task.courseName || "未命名学科")}</span>
+      <span>${escapeHtml(state.task.taskType || "知识点讲解")}</span>
+      <span>${escapeHtml(topicLabel)}</span>
     </div>
+    <p>${escapeHtml(state.task.taskContent || "当前主题")}</p>
   `;
 }
 
@@ -1063,14 +1120,54 @@ function openLibrary() {
   saveSession();
 }
 
+function renderSidebarConversations() {
+  loadLibrary();
+  const records = state.library.slice(0, 24);
+
+  elements.sidebarConversationList.innerHTML = records.length
+    ? records.map(renderSidebarConversationItem).join("")
+    : `<div class="sidebar-empty-state">暂无对话记录</div>`;
+}
+
+function renderSidebarConversationItem(record) {
+  const active = record.id === state.libraryId || (state.screen === "library" && record.id === state.activeLibraryId);
+
+  return `
+    <button class="sidebar-conversation-item ${active ? "active" : ""}" type="button" title="左键打开，右键删除" data-conversation-id="${escapeHtml(record.id)}">
+      <span class="sidebar-conversation-title">${escapeHtml(record.title)}</span>
+      <span class="sidebar-conversation-time">${escapeHtml(formatSidebarTime(record.updatedAt))}</span>
+    </button>
+  `;
+}
+
+function loadSidebarConversation(event) {
+  const item = event.target.closest("[data-conversation-id]");
+  if (!item) return;
+
+  loadLibrary();
+  state.activeLibraryId = item.dataset.conversationId;
+  loadSelectedLibraryRecord({ source: "sidebar" });
+}
+
+function deleteSidebarConversation(event) {
+  const item = event.target.closest("[data-conversation-id]");
+  if (!item) return;
+
+  event.preventDefault();
+  loadLibrary();
+  const record = state.library.find((entry) => entry.id === item.dataset.conversationId);
+  if (!record) return;
+  removeLibraryRecord(record, { source: "sidebar" });
+}
+
 function saveCurrentToLibrary({ requireReport = false, silent = false } = {}) {
   if (!state.task) {
-    showSaveNotice("先创建一个讲解会话，再保存到知识库。");
+    showSaveNotice("先创建一个讲解会话，再保存到对话记录。");
     return;
   }
 
   if (requireReport && !state.report) {
-    showSaveNotice("请先生成报告，再保存到知识库。");
+    showSaveNotice("请先生成报告，再保存到对话记录。");
     return;
   }
 
@@ -1108,9 +1205,10 @@ function saveCurrentToLibrary({ requireReport = false, silent = false } = {}) {
   if (state.screen === "library") {
     renderLibrary();
   }
+  renderSidebarConversations();
 
   if (!silent) {
-    showSaveNotice(existing ? "已更新到个人知识库。" : "已保存到个人知识库。");
+    showSaveNotice(existing ? "已更新对话记录。" : "已保存到对话记录。");
   }
 }
 
@@ -1133,7 +1231,7 @@ function selectLibraryRecord(event) {
   saveSession();
 }
 
-function loadSelectedLibraryRecord() {
+function loadSelectedLibraryRecord(options = {}) {
   const record = getActiveLibraryRecord();
   if (!record) return;
 
@@ -1154,27 +1252,42 @@ function loadSelectedLibraryRecord() {
   if (state.report) renderReport();
   switchScreen(state.report ? "report" : "lecture");
   saveSession();
-  showSaveNotice(state.report ? "已进入这条记录的诊断报告。" : "这条记录还没有报告，已进入讲解继续完善。");
+  renderSidebarConversations();
+  const defaultMessage = state.report ? "已进入这条记录的诊断报告。" : "这条记录还没有报告，已进入讲解继续完善。";
+  showSaveNotice(options.source === "sidebar" ? "已打开这段对话。" : defaultMessage);
 }
 
 function deleteSelectedLibraryRecord() {
   const record = getActiveLibraryRecord();
   if (!record) return;
 
-  const confirmed = window.confirm(`删除「${record.title}」这条知识库记录？`);
+  removeLibraryRecord(record);
+}
+
+function removeLibraryRecord(record, options = {}) {
+  const confirmed = window.confirm(`删除「${record.title}」这条对话记录？`);
   if (!confirmed) return;
 
+  const removedCurrent = state.libraryId === record.id;
   state.library = state.library.filter((item) => item.id !== record.id);
-  if (state.libraryId === record.id) {
+  if (removedCurrent) {
     state.libraryId = "";
   }
   state.activeLibraryId = state.library[0]?.id || "";
   saveLibrary();
   void deleteRemoteLibraryRecord(record.id);
+
+  if (removedCurrent) {
+    resetSession();
+    showSaveNotice("已删除当前对话。");
+    return;
+  }
+
   renderLibrary();
+  renderSidebarConversations();
   updateSaveButtons();
   saveSession();
-  showSaveNotice("已从个人知识库删除。");
+  showSaveNotice(options.source === "sidebar" ? "已删除这条对话。" : "已从对话记录删除。");
 }
 
 function renderLibrary() {
@@ -1193,10 +1306,11 @@ function renderLibrary() {
   elements.libraryList.innerHTML = filtered.length
     ? filtered.map(renderLibraryListItem).join("")
     : `<div class="library-empty-state">${
-        state.library.length ? "没有匹配的记录。" : "还没有学习档案。生成报告后，可以把问答记录和理解报告存到这里。"
+        state.library.length ? "没有匹配的记录。" : "还没有对话记录。开始讲解后，系统会自动保存问答和报告。"
       }</div>`;
 
   renderLibraryDetail();
+  renderSidebarConversations();
   updateSaveButtons();
 }
 
@@ -1223,7 +1337,7 @@ function renderLibraryDetail() {
   if (!record) {
     elements.libraryDetail.innerHTML = `
       <div class="library-empty-state detail-empty">
-        ${state.library.length ? "选中一条记录后，可以查看问答记录和理解报告。" : "知识库会保存每次讲解的问答记录、追问点和诊断报告。"}
+        ${state.library.length ? "选中一条记录后，可以查看问答记录和理解报告。" : "对话记录会保存每次讲解的问答记录、追问点和诊断报告。"}
       </div>
     `;
     return;
@@ -1461,11 +1575,31 @@ function formatSavedAt(value) {
   });
 }
 
+function formatSidebarTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const now = Date.now();
+  const diffMs = Math.max(0, now - date.getTime());
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays === 0) {
+    return date.toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
+  if (diffDays < 7) return `${diffDays} 天`;
+  if (diffDays < 35) return `${Math.floor(diffDays / 7)} 周`;
+  return date.toLocaleDateString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
 function updateSaveButtons() {
-  elements.saveDraftButton.disabled = state.busy || !state.task;
-  elements.saveDraftButton.textContent = state.libraryId ? "更新记录" : "保存记录";
   elements.saveReportButton.disabled = state.busy || !state.report;
-  elements.saveReportButton.textContent = "存入知识库";
+  elements.saveReportButton.textContent = "存入对话记录";
   elements.libraryLoadButton.disabled = !state.activeLibraryId;
   elements.libraryDeleteButton.disabled = !state.activeLibraryId;
 }
@@ -1529,21 +1663,6 @@ function setRadioValue(name, value) {
   if (input) input.checked = true;
 }
 
-function fillConceptSample() {
-  elements.courseName.value = "高等数学";
-  elements.taskContent.value = "拉格朗日中值定理";
-  setRadioValue("taskType", "知识点讲解");
-  updateSetupPreview();
-}
-
-function fillProblemSample() {
-  elements.courseName.value = "大学物理";
-  elements.taskContent.value =
-    "一个电容器充电过程中，电压随时间变化为 U(t)=U0(1-e^{-t/RC})。请解释这个表达式从哪里来，并说明每个量的含义。";
-  setRadioValue("taskType", "题目讲解");
-  updateSetupPreview();
-}
-
 function setBusy(isBusy, message = "AI 学生正在思考...") {
   state.busy = isBusy;
   elements.loadingState.hidden = !isBusy;
@@ -1605,6 +1724,7 @@ function resetSession() {
   setRadioValue("taskType", "知识点讲解");
   elements.replyInput.value = "";
   elements.conversation.innerHTML = "";
+  elements.lectureTopicBanner.innerHTML = "";
   elements.focusList.innerHTML = `<p class="muted">暂无观察。</p>`;
   elements.reportPanel.innerHTML = "";
   closeFormulaModal();

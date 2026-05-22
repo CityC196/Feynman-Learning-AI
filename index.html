@@ -7,31 +7,44 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-block">
-          <h1>AI费曼教室</h1>
+    <div class="app-shell main-app-shell">
+      <aside class="app-sidebar" aria-label="对话导航">
+        <div class="sidebar-top">
+          <div class="brand-block">
+            <h1>AI费曼教室</h1>
+          </div>
+          <button id="lectureButton" class="sidebar-primary-button" type="button">新对话</button>
+          <button id="feedbackButton" class="sidebar-action-button" type="button">我的反馈</button>
         </div>
-        <nav class="app-nav" aria-label="主导航">
-          <button id="lectureButton" class="nav-button" type="button">新的讲解</button>
-          <button id="libraryButton" class="nav-button" type="button">个人知识库</button>
-          <button id="feedbackButton" class="nav-button" type="button">我的反馈</button>
-          <a class="nav-button nav-link" href="./admin.html">调研后台</a>
-        </nav>
-      </header>
-      <div id="saveNotice" class="save-notice" hidden aria-live="polite"></div>
-      <section id="privacyBanner" class="privacy-banner" hidden>
-        <div>
-          <strong>测评数据同步</strong>
-          <span id="researchStatus">请先授权同步并生成访问码。</span>
-        </div>
-        <div class="privacy-actions">
-          <button id="joinResearchButton" class="secondary-button" type="button">授权并生成访问码</button>
-          <button id="stopSyncButton" class="ghost-button" type="button" hidden>仅本机保存</button>
-        </div>
-      </section>
 
-      <main>
+        <section class="sidebar-history" aria-labelledby="conversationHistoryTitle">
+          <div class="sidebar-section-heading">
+            <h2 id="conversationHistoryTitle">对话</h2>
+            <button id="libraryButton" class="sidebar-text-button" type="button">全部</button>
+          </div>
+          <div id="sidebarConversationList" class="sidebar-conversation-list"></div>
+        </section>
+
+        <div class="sidebar-footer">
+          <span>费曼学习法</span>
+          <span>本机自动保存</span>
+        </div>
+      </aside>
+
+      <div class="workspace-shell">
+        <div id="saveNotice" class="save-notice" hidden aria-live="polite"></div>
+        <section id="privacyBanner" class="privacy-banner" hidden>
+          <div>
+            <strong>测评数据同步</strong>
+            <span id="researchStatus">请先授权同步并生成访问码。</span>
+          </div>
+          <div class="privacy-actions">
+            <button id="joinResearchButton" class="secondary-button" type="button">授权并生成访问码</button>
+            <button id="stopSyncButton" class="ghost-button" type="button" hidden>仅本机保存</button>
+          </div>
+        </section>
+
+        <main>
         <section id="setupScreen" class="screen active" aria-labelledby="setupTitle">
           <div class="setup-layout">
             <form id="taskForm" class="setup-panel">
@@ -84,8 +97,6 @@
 
               <div class="button-row">
                 <button class="primary-button" type="submit">进入讲解</button>
-                <button id="sampleConceptButton" class="secondary-button" type="button">知识点示例</button>
-                <button id="sampleProblemButton" class="secondary-button" type="button">题目示例</button>
               </div>
             </form>
 
@@ -135,13 +146,9 @@
                   <p class="eyebrow">讲给 AI 学生</p>
                   <h2 id="lectureTitle">讲解工作区</h2>
                 </div>
-                <div class="toolbar-actions">
-                  <button id="saveDraftButton" class="ghost-button" type="button">保存记录</button>
-                  <button id="editSetupButton" class="ghost-button" type="button">修改任务</button>
-                  <button id="resetButton" class="ghost-button" type="button">重置</button>
-                </div>
               </div>
 
+              <div id="lectureTopicBanner" class="lecture-topic-banner"></div>
               <div id="conversation" class="conversation"></div>
 
               <form id="replyForm" class="reply-form">
@@ -173,7 +180,7 @@
                 <p class="section-subtitle">把本次讲解中没讲透、已经讲清楚和下一轮要重讲的部分整理出来。</p>
               </div>
               <div class="button-row">
-                <button id="saveReportButton" class="primary-button" type="button">存入知识库</button>
+                <button id="saveReportButton" class="primary-button" type="button">存入对话记录</button>
                 <button id="continueButton" class="secondary-button" type="button">继续讲解</button>
               </div>
             </div>
@@ -185,8 +192,8 @@
           <div class="library-layout">
             <aside class="library-sidebar">
               <div class="section-heading">
-                <p class="eyebrow">个人知识库</p>
-                <h2 id="libraryTitle">学习档案</h2>
+                <p class="eyebrow">对话记录</p>
+                <h2 id="libraryTitle">全部对话</h2>
               </div>
 
               <label class="library-search">
@@ -220,7 +227,7 @@
                   <h2>问答记录与报告</h2>
                 </div>
                 <div class="button-row">
-                  <button id="libraryLoadButton" class="primary-button" type="button">进入知识点</button>
+                  <button id="libraryLoadButton" class="primary-button" type="button">进入对话</button>
                   <button id="libraryDeleteButton" class="ghost-button" type="button">删除这条记录</button>
                 </div>
               </div>
@@ -228,7 +235,8 @@
             </section>
           </div>
         </section>
-      </main>
+        </main>
+      </div>
     </div>
 
     <div id="consentModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="consentModalTitle" hidden>
@@ -241,7 +249,7 @@
         </div>
 
         <div class="consent-copy">
-          <p>开始使用前，请授权系统把你的讲解内容、AI 追问、诊断报告、个人知识库记录和反馈意见同步到后台，用于产品调研和学习效果分析。</p>
+          <p>开始使用前，请授权系统把你的讲解内容、AI 追问、诊断报告、对话记录和反馈意见同步到后台，用于产品调研和学习效果分析。</p>
           <p>授权后系统会为你生成一个唯一访问码。后台只按访问码查看记录，不要求填写姓名、手机号或学校。</p>
         </div>
 
@@ -338,11 +346,11 @@
         <div class="feedback-image-grid">
           <label class="upload-box compact">
             <span>上传或粘贴截图</span>
-            <input id="feedbackImageInput" type="file" accept="image/png,image/jpeg,image/webp" />
+            <input id="feedbackImageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
           </label>
           <div class="image-preview-box compact">
-            <img id="feedbackImagePreview" alt="反馈截图预览" hidden />
-            <p id="feedbackImageEmptyState" class="muted">可直接在此窗口粘贴截图，单张不超过 5MB。</p>
+            <div id="feedbackImagePreviewList" class="feedback-preview-list" hidden></div>
+            <p id="feedbackImageEmptyState" class="muted">可多选上传，也可直接粘贴多张截图，单张不超过 5MB。</p>
           </div>
         </div>
 
@@ -351,7 +359,7 @@
 
         <div class="button-row">
           <button id="submitFeedbackButton" class="primary-button" type="button">提交反馈</button>
-          <button id="removeFeedbackImageButton" class="secondary-button" type="button" disabled>移除截图</button>
+          <button id="removeFeedbackImageButton" class="secondary-button" type="button" disabled>移除全部截图</button>
           <button id="cancelFeedbackButton" class="ghost-button" type="button">取消</button>
         </div>
       </section>

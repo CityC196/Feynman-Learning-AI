@@ -111,12 +111,71 @@ function renderFeedbackRecords(feedbackRecords) {
             </div>
             <div class="feedback-record-body">
               <p>${escapeHtml(feedback.message || "用户只提交了截图。")}</p>
-              ${feedback.imageDataUrl ? `<img src="${escapeHtml(feedback.imageDataUrl)}" alt="用户反馈截图" />` : ""}
+              ${renderFeedbackImages(feedback)}
+              ${renderFeedbackDialogue(feedback.context?.messages || [])}
             </div>
           </article>
         `;
       })
       .join("")}
+  `;
+}
+
+function renderFeedbackImages(feedback) {
+  const images = Array.isArray(feedback.imageDataUrls) && feedback.imageDataUrls.length
+    ? feedback.imageDataUrls
+    : feedback.imageDataUrl
+      ? [feedback.imageDataUrl]
+      : [];
+
+  if (!images.length) return "";
+
+  return `
+    <div class="feedback-image-list">
+      ${images
+        .map(
+          (imageDataUrl, index) => `
+            <figure class="feedback-image-item">
+              <img src="${escapeHtml(imageDataUrl)}" alt="用户反馈截图 ${index + 1}" />
+              <figcaption>截图 ${index + 1}</figcaption>
+            </figure>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderFeedbackDialogue(messages) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return `<div class="library-empty-state">提交反馈时没有可附带的对话记录。</div>`;
+  }
+
+  return `
+    <section class="feedback-dialogue">
+      <div class="library-section-heading">
+        <h3>提交时完整对话</h3>
+        <span>${messages.length} 条消息</span>
+      </div>
+      <div class="feedback-dialogue-list">
+        ${messages
+          .map((message) => {
+            const isUser = message.role === "user";
+            const roleLabel = isUser
+              ? `用户第 ${Number(message.turn || 0)} 轮讲解`
+              : Number(message.turn || 0) === 0
+                ? "AI 学生开场"
+                : "AI 学生追问";
+            return `
+              <article class="feedback-dialogue-message ${isUser ? "user" : "assistant"}">
+                <strong>${escapeHtml(roleLabel)}</strong>
+                <p>${escapeHtml(message.text || "")}</p>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+    </section>
   `;
 }
 
