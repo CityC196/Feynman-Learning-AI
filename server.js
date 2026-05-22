@@ -13,6 +13,7 @@ const ZHIPU_VISION_MODEL = process.env.ZHIPU_VISION_MODEL || "glm-4.5v";
 const ZHIPU_ENDPOINT =
   process.env.ZHIPU_ENDPOINT || "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const MAX_JSON_BYTES = 8_000_000;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DATA_FILE = process.env.DATA_FILE || path.join(DATA_DIR, "research-store.json");
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
@@ -20,6 +21,7 @@ const PRIVACY_CONSENT_VERSION = process.env.PRIVACY_CONSENT_VERSION || "2026-05-
 const ALLOWED_ORIGINS = parseCsv(process.env.ALLOWED_ORIGINS || "");
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 10 * 60 * 1000);
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 120);
+const HSTS_HEADER = process.env.HSTS_HEADER || "max-age=31536000; includeSubDomains";
 const store = loadDataStore();
 const rateLimitBuckets = new Map();
 
@@ -37,6 +39,7 @@ const mimeTypes = {
 
 const server = http.createServer(async (request, response) => {
   setCorsHeaders(request, response);
+  setSecurityHeaders(response);
 
   if (request.method === "OPTIONS") {
     response.writeHead(204);
@@ -92,6 +95,12 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/admin/records" && request.method === "GET") {
       requireAdmin(request);
       sendJson(response, 200, getAdminRecords());
+      return;
+    }
+
+    if (url.pathname === "/api/feedback" && request.method === "POST") {
+      const payload = await readJson(request);
+      sendJson(response, 201, createFeedback(payload, request));
       return;
     }
 
@@ -219,7 +228,7 @@ async function createImageRecognition(payload) {
   }
 
   const approxBytes = Math.ceil((imageDataUrl.split(",")[1] || "").length * 0.75);
-  if (approxBytes > 5 * 1024 * 1024) {
+  if (approxBytes > MAX_IMAGE_BYTES) {
     throw httpError(413, "图片不能超过 5MB。");
   }
 
@@ -415,6 +424,40 @@ function requireAdmin(request) {
   }
 }
 
+function createFeedback(payload, request) {
+  const now = new Date().toISOString();
+  const participant = requireParticipant(request);
+  const message = stringOrDefault(payload?.message, "").slice(0, 4000);
+  const imageDataUrl = stringOrDefault(payload?.imageDataUrl, "");
+
+  if (!message && !imageDataUrl) {
+    throw httpError(400, "请先写下反馈内容，或粘贴一张问题截图。");
+  }
+
+  if (imageDataUrl) {
+    validateImageDataUrl(imageDataUrl);
+  }
+
+  const feedback = {
+    id: createId("feedback"),
+    message,
+    imageDataUrl,
+    imageMimeType: imageDataUrl ? getImageDataUrlMimeType(imageDataUrl) : "",
+    context: normalizeFeedbackContext(payload?.context),
+    participantId: participant.id,
+    participantCode: participant.publicCode,
+    createdAt: now,
+  };
+
+  store.feedbackRecords.unshift(feedback);
+  persistStore();
+
+  return {
+    ok: true,
+    feedbackId: feedback.id,
+  };
+}
+
 function getParticipantRecords(participantId) {
   return store.libraryRecords
     .filter((record) => record.participantId === participantId)
@@ -461,6 +504,7 @@ function deleteLibraryRecord(participant, recordId) {
 
 function getAdminRecords() {
   const records = store.libraryRecords.slice().sort(sortByUpdatedAtDesc);
+  const feedbackRecords = store.feedbackRecords.slice().sort(sortByCreatedAtDesc);
   const participantMap = new Map(store.participants.map((item) => [item.id, item]));
   const participants = store.participants.map((participant) => ({
     id: participant.id,
@@ -477,6 +521,7 @@ function getAdminRecords() {
       participantCount: store.participants.length,
       recordCount: records.length,
       reportCount: records.filter((record) => record.report).length,
+      feedbackCount: feedbackRecords.length,
       latestUpdatedAt: records[0]?.updatedAt || "",
     },
     participants,
@@ -484,7 +529,23 @@ function getAdminRecords() {
       ...toClientRecord(record),
       participantCode: participantMap.get(record.participantId)?.publicCode || "UNKNOWN",
     })),
+    feedbackRecords: feedbackRecords.map((feedback) => ({
+      id: feedback.id,
+      message: feedback.message,
+      imageDataUrl: feedback.imageDataUrl,
+      imageMimeType: feedback.imageMimeType,
+      context: feedback.context,
+      participantCode:
+        feedback.participantCode ||
+        participantMap.get(feedback.participantId)?.publicCode ||
+        "UNKNOWN",
+      createdAt: feedback.createdAt,
+    })),
   };
+}
+
+function sortByCreatedAtDesc(left, right) {
+  return new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime();
 }
 
 function normalizeStoredLibraryRecord(record, participant, now) {
@@ -531,6 +592,17 @@ function normalizeStoredObservations(items) {
   }));
 }
 
+function normalizeFeedbackContext(context) {
+  const task = context?.task && typeof context.task === "object" ? normalizeTask(context.task) : null;
+
+  return {
+    screen: stringOrDefault(context?.screen, "").slice(0, 60),
+    url: stringOrDefault(context?.url, "").slice(0, 300),
+    userAgent: stringOrDefault(context?.userAgent, "").slice(0, 300),
+    task,
+  };
+}
+
 function toClientRecord(record) {
   return {
     id: record.id,
@@ -547,7 +619,7 @@ function toClientRecord(record) {
 
 function loadDataStore() {
   if (!fs.existsSync(DATA_FILE)) {
-    return { participants: [], libraryRecords: [] };
+    return { participants: [], libraryRecords: [], feedbackRecords: [] };
   }
 
   try {
@@ -555,9 +627,10 @@ function loadDataStore() {
     return {
       participants: Array.isArray(parsed.participants) ? parsed.participants : [],
       libraryRecords: Array.isArray(parsed.libraryRecords) ? parsed.libraryRecords : [],
+      feedbackRecords: Array.isArray(parsed.feedbackRecords) ? parsed.feedbackRecords : [],
     };
   } catch {
-    return { participants: [], libraryRecords: [] };
+    return { participants: [], libraryRecords: [], feedbackRecords: [] };
   }
 }
 
@@ -766,6 +839,12 @@ function setCorsHeaders(request, response) {
   );
 }
 
+function setSecurityHeaders(response) {
+  if (HSTS_HEADER) {
+    response.setHeader("Strict-Transport-Security", HSTS_HEADER);
+  }
+}
+
 function enforceRateLimit(request) {
   const key = getClientIp(request);
   const now = Date.now();
@@ -920,6 +999,21 @@ function normalizeObservations(items) {
 
 function isSupportedImageDataUrl(value) {
   return /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/i.test(value);
+}
+
+function validateImageDataUrl(value) {
+  if (!isSupportedImageDataUrl(value)) {
+    throw httpError(400, "请上传 png、jpg、jpeg 或 webp 图片。");
+  }
+
+  const approxBytes = Math.ceil((String(value).split(",")[1] || "").length * 0.75);
+  if (approxBytes > MAX_IMAGE_BYTES) {
+    throw httpError(413, "图片不能超过 5MB。");
+  }
+}
+
+function getImageDataUrlMimeType(value) {
+  return String(value).match(/^data:([^;]+);base64,/i)?.[1] || "";
 }
 
 function stripImageDataUrlPrefix(value) {

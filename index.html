@@ -6,43 +6,33 @@
     <title>AI费曼教室</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body class="intro-active">
+  <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand-block">
-          <div class="brand-mark" aria-hidden="true">讲</div>
-          <div>
-            <p class="eyebrow">AI费曼教室</p>
-            <h1>AI费曼教室</h1>
-            <p class="product-subtitle">把知识讲给 AI 学生，发现自己哪里没讲明白</p>
-          </div>
+          <h1>AI费曼教室</h1>
         </div>
         <nav class="app-nav" aria-label="主导航">
           <button id="lectureButton" class="nav-button" type="button">新的讲解</button>
           <button id="libraryButton" class="nav-button" type="button">个人知识库</button>
+          <button id="feedbackButton" class="nav-button" type="button">我的反馈</button>
           <a class="nav-button nav-link" href="./admin.html">调研后台</a>
         </nav>
       </header>
       <div id="saveNotice" class="save-notice" hidden aria-live="polite"></div>
       <section id="privacyBanner" class="privacy-banner" hidden>
         <div>
-          <strong>匿名测评同步</strong>
-          <span id="researchStatus">仅保存在本机，后台暂不可见。</span>
+          <strong>测评数据同步</strong>
+          <span id="researchStatus">请先授权同步并生成访问码。</span>
         </div>
         <div class="privacy-actions">
-          <button id="joinResearchButton" class="secondary-button" type="button">同意并开启同步</button>
-          <button id="stopSyncButton" class="ghost-button" type="button">仅本机保存</button>
+          <button id="joinResearchButton" class="secondary-button" type="button">授权并生成访问码</button>
+          <button id="stopSyncButton" class="ghost-button" type="button" hidden>仅本机保存</button>
         </div>
       </section>
 
       <main>
-        <section id="introScreen" class="screen active" aria-label="AI费曼教室">
-          <div class="intro-hero">
-            <button id="startExperienceButton" class="intro-product-name" type="button">AI费曼教室</button>
-          </div>
-        </section>
-
-        <section id="setupScreen" class="screen" aria-labelledby="setupTitle">
+        <section id="setupScreen" class="screen active" aria-labelledby="setupTitle">
           <div class="setup-layout">
             <form id="taskForm" class="setup-panel">
               <div class="section-heading">
@@ -75,15 +65,21 @@
                   </label>
                 </fieldset>
 
-                <label class="wide-field">
-                  <span id="taskContentLabel">知识点</span>
+                <div class="wide-field task-content-field">
+                  <div class="reply-input-header">
+                    <label id="taskContentLabel" for="taskContent">知识点</label>
+                    <div class="input-tools" aria-label="主题输入辅助工具">
+                      <button id="taskFormulaToolButton" class="tool-button" type="button">公式</button>
+                      <button id="taskImageToolButton" class="tool-button" type="button">识别图片</button>
+                    </div>
+                  </div>
                   <textarea
                     id="taskContent"
                     name="taskContent"
                     rows="6"
                     placeholder="如：弯矩与正应力关系"
                   ></textarea>
-                </label>
+                </div>
               </div>
 
               <div class="button-row">
@@ -239,24 +235,24 @@
       <section class="modal-card consent-card">
         <div class="modal-header">
           <div>
-            <p class="eyebrow">匿名测评同步</p>
-            <h2 id="consentModalTitle">允许同步学习记录到调研后台</h2>
+            <p class="eyebrow">测评授权</p>
+            <h2 id="consentModalTitle">授权同步对话和记录</h2>
           </div>
         </div>
 
         <div class="consent-copy">
-          <p>开启后，系统会把你的讲解内容、AI 追问、诊断报告和个人知识库记录同步到后台，用于产品调研和学习效果分析。</p>
-          <p>系统会使用匿名测试码，不要求填写姓名、手机号或学校。你仍然可以选择仅保存在本机。</p>
+          <p>开始使用前，请授权系统把你的讲解内容、AI 追问、诊断报告、个人知识库记录和反馈意见同步到后台，用于产品调研和学习效果分析。</p>
+          <p>授权后系统会为你生成一个唯一访问码。后台只按访问码查看记录，不要求填写姓名、手机号或学校。</p>
         </div>
 
         <label class="consent-check">
           <input id="consentCheckbox" type="checkbox" />
-          <span>我已了解并同意将本次测评数据以匿名测试码同步到调研后台。</span>
+          <span>我已了解并同意将本次测评数据和反馈意见以唯一访问码同步到调研后台。</span>
         </label>
 
         <div class="button-row">
-          <button id="confirmConsentButton" class="primary-button" type="button">开启匿名同步</button>
-          <button id="cancelConsentButton" class="ghost-button" type="button">暂不开启</button>
+          <button id="confirmConsentButton" class="primary-button" type="button">授权并生成访问码</button>
+          <button id="cancelConsentButton" class="ghost-button" type="button" hidden>暂不开启</button>
         </div>
       </section>
     </div>
@@ -272,7 +268,7 @@
         </div>
 
         <math-field id="formulaField" math-virtual-keyboard-policy="manual"></math-field>
-        <p class="modal-hint">插入后会以 LaTeX 形式进入讲解，例如 <span>\( f'(x)=0 \)</span>。</p>
+        <p id="formulaModalHint" class="modal-hint">插入后会以 LaTeX 形式进入讲解，例如 <span>\( f'(x)=0 \)</span>。</p>
 
         <div class="button-row">
           <button id="insertFormulaButton" class="primary-button" type="button">插入公式</button>
@@ -282,7 +278,7 @@
       </section>
     </div>
 
-    <div id="imageModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="imageModalTitle" hidden>
+    <div id="imageModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="imageModalTitle" tabindex="-1" hidden>
       <section class="modal-card image-card">
         <div class="modal-header">
           <div>
@@ -294,12 +290,12 @@
 
         <div class="image-recognition-grid">
           <label class="upload-box">
-            <span>选择图片</span>
+            <span>选择图片或直接粘贴</span>
             <input id="imageUploadInput" type="file" accept="image/png,image/jpeg,image/webp" />
           </label>
           <div class="image-preview-box">
             <img id="imagePreview" alt="待识别图片预览" hidden />
-            <p id="imageEmptyState" class="muted">支持 png、jpg、jpeg、webp，单张不超过 5MB。</p>
+            <p id="imageEmptyState" class="muted">支持 png、jpg、jpeg、webp，单张不超过 5MB。打开弹窗后可直接粘贴截图。</p>
           </div>
         </div>
 
@@ -320,6 +316,43 @@
           <button id="recognizeImageButton" class="secondary-button" type="button" disabled>开始识别</button>
           <button id="insertRecognizedButton" class="primary-button" type="button">插入讲解</button>
           <button id="cancelImageButton" class="ghost-button" type="button">取消</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="feedbackModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="feedbackModalTitle" tabindex="-1" hidden>
+      <section class="modal-card feedback-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">我的反馈</p>
+            <h2 id="feedbackModalTitle">告诉我们你遇到的问题</h2>
+          </div>
+          <button id="closeFeedbackButton" class="ghost-button" type="button" aria-label="关闭反馈">关闭</button>
+        </div>
+
+        <label class="recognized-field">
+          <span>反馈内容</span>
+          <textarea id="feedbackMessageInput" rows="6" placeholder="哪里不好用、哪里出错了，或你希望怎么改"></textarea>
+        </label>
+
+        <div class="feedback-image-grid">
+          <label class="upload-box compact">
+            <span>上传或粘贴截图</span>
+            <input id="feedbackImageInput" type="file" accept="image/png,image/jpeg,image/webp" />
+          </label>
+          <div class="image-preview-box compact">
+            <img id="feedbackImagePreview" alt="反馈截图预览" hidden />
+            <p id="feedbackImageEmptyState" class="muted">可直接在此窗口粘贴截图，单张不超过 5MB。</p>
+          </div>
+        </div>
+
+        <div id="feedbackStatus" class="loading-state" hidden></div>
+        <div id="feedbackError" class="error-state" hidden></div>
+
+        <div class="button-row">
+          <button id="submitFeedbackButton" class="primary-button" type="button">提交反馈</button>
+          <button id="removeFeedbackImageButton" class="secondary-button" type="button" disabled>移除截图</button>
+          <button id="cancelFeedbackButton" class="ghost-button" type="button">取消</button>
         </div>
       </section>
     </div>

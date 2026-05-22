@@ -5,6 +5,7 @@ const elements = {
   loadButton: document.querySelector("#loadAdminButton"),
   status: document.querySelector("#adminStatus"),
   stats: document.querySelector("#adminStats"),
+  feedbackRecords: document.querySelector("#adminFeedbackRecords"),
   records: document.querySelector("#adminRecords"),
 };
 
@@ -38,10 +39,12 @@ async function loadAdminRecords() {
 
     sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
     renderStats(body.summary || {});
+    renderFeedbackRecords(body.feedbackRecords || []);
     renderRecords(body.records || []);
     showStatus("调研数据已更新。");
   } catch (error) {
     renderStats({});
+    renderFeedbackRecords([]);
     renderRecords([]);
     showStatus(error.message || "后台数据加载失败。", true);
   } finally {
@@ -64,9 +67,56 @@ function renderStats(summary) {
       <strong>${Number(summary.reportCount || 0)}</strong>
     </article>
     <article class="admin-stat-card">
+      <span>用户反馈</span>
+      <strong>${Number(summary.feedbackCount || 0)}</strong>
+    </article>
+    <article class="admin-stat-card">
       <span>最近同步</span>
       <strong>${escapeHtml(formatDate(summary.latestUpdatedAt))}</strong>
     </article>
+  `;
+}
+
+function renderFeedbackRecords(feedbackRecords) {
+  if (!feedbackRecords.length) {
+    elements.feedbackRecords.innerHTML = `<div class="library-empty-state">暂无用户反馈。</div>`;
+    return;
+  }
+
+  elements.feedbackRecords.innerHTML = `
+    <div class="section-heading">
+      <p class="eyebrow">用户反馈</p>
+      <h2>问题与建议</h2>
+    </div>
+    ${feedbackRecords
+      .map((feedback) => {
+        const task = feedback.context?.task;
+        const contextText = [
+          feedback.context?.screen ? `页面：${feedback.context.screen}` : "",
+          task?.taskContent ? `主题：${task.taskContent}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+        return `
+          <article class="admin-record-card feedback-record-card">
+            <div class="library-record-header">
+              <div>
+                <div class="tag-row">
+                  <span class="tag">${escapeHtml(feedback.participantCode || "UNKNOWN")}</span>
+                  <span class="tag neutral">${escapeHtml(formatDate(feedback.createdAt))}</span>
+                </div>
+                <h3>${escapeHtml(contextText || "未记录上下文")}</h3>
+              </div>
+            </div>
+            <div class="feedback-record-body">
+              <p>${escapeHtml(feedback.message || "用户只提交了截图。")}</p>
+              ${feedback.imageDataUrl ? `<img src="${escapeHtml(feedback.imageDataUrl)}" alt="用户反馈截图" />` : ""}
+            </div>
+          </article>
+        `;
+      })
+      .join("")}
   `;
 }
 

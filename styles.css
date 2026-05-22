@@ -73,16 +73,6 @@ button {
   backdrop-filter: blur(14px);
 }
 
-.intro-active .app-shell {
-  padding: 0;
-}
-
-.intro-active .topbar,
-.intro-active .save-notice,
-.intro-active .privacy-banner {
-  display: none;
-}
-
 .eyebrow {
   margin: 0 0 6px;
   color: var(--teal);
@@ -123,31 +113,8 @@ h3 {
   gap: 12px;
 }
 
-.brand-mark {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
-  place-items: center;
-  border-radius: 12px;
-  background: var(--navy);
-  color: #f4fffb;
-  font-size: 19px;
-  font-weight: 900;
-  box-shadow: inset 0 -3px 0 rgba(255, 255, 255, 0.08);
-}
-
-.brand-block .eyebrow {
-  margin-bottom: 3px;
-  color: var(--teal-dark);
-  font-size: 11px;
-}
-
-.product-subtitle {
+.brand-block h1 {
   margin-bottom: 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .app-nav {
@@ -247,31 +214,6 @@ h3 {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
-}
-
-.intro-hero {
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  min-height: 100vh;
-  padding: clamp(56px, 10vh, 120px) 18px;
-  text-align: center;
-}
-
-.intro-product-name {
-  border: 0;
-  background: transparent;
-  color: #050807;
-  font-size: clamp(44px, 7vw, 86px);
-  font-weight: 900;
-  line-height: 1.08;
-  letter-spacing: 0;
-}
-
-.intro-product-name:hover,
-.intro-product-name:focus-visible {
-  color: #050807;
-  outline: none;
 }
 
 .setup-layout {
@@ -391,6 +333,7 @@ h3 {
 }
 
 .setup-panel label,
+.task-content-field,
 .reply-form label {
   display: grid;
   gap: 8px;
@@ -1030,7 +973,7 @@ button:disabled {
 
 .admin-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
 }
 
@@ -1067,6 +1010,31 @@ button:disabled {
   margin-top: 14px;
 }
 
+.feedback-record-card {
+  display: grid;
+  gap: 14px;
+}
+
+.feedback-record-body {
+  display: grid;
+  gap: 12px;
+}
+
+.feedback-record-body p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.feedback-record-body img {
+  max-width: min(100%, 760px);
+  max-height: 520px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  object-fit: contain;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -1096,6 +1064,10 @@ button:disabled {
 
 .formula-card {
   width: min(640px, 100%);
+}
+
+.feedback-card {
+  width: min(820px, 100%);
 }
 
 .modal-header {
@@ -1174,7 +1146,8 @@ math-field:focus-within {
   accent-color: var(--teal);
 }
 
-.image-recognition-grid {
+.image-recognition-grid,
+.feedback-image-grid {
   display: grid;
   grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
   gap: 14px;
@@ -1200,6 +1173,11 @@ math-field:focus-within {
   padding: 14px;
   background: #f7fffc;
   text-align: center;
+}
+
+.upload-box.compact,
+.image-preview-box.compact {
+  min-height: 130px;
 }
 
 .upload-box input {
@@ -1318,14 +1296,6 @@ math-field:focus-within {
     align-items: flex-start;
   }
 
-  .brand-mark {
-    width: 38px;
-    height: 38px;
-    flex-basis: 38px;
-    border-radius: 10px;
-    font-size: 17px;
-  }
-
   .app-nav,
   .nav-button {
     width: 100%;
@@ -1340,18 +1310,10 @@ math-field:focus-within {
     padding: 0 10px;
   }
 
-  .intro-hero {
-    min-height: 100vh;
-    padding: 46px 4px;
-  }
-
-  .intro-product-name {
-    font-size: 34px;
-  }
-
   .form-grid,
   .knowledge-map,
-  .image-recognition-grid {
+  .image-recognition-grid,
+  .feedback-image-grid {
     grid-template-columns: 1fr;
   }
 

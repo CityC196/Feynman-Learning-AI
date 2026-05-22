@@ -5,7 +5,7 @@ const PARTICIPANT_STORAGE_KEY = "mechanics-feynman-participant";
 const PRIVACY_CONSENT_VERSION = "2026-05-22";
 
 const state = {
-  screen: "intro",
+  screen: "setup",
   task: null,
   messages: [],
   observations: [],
@@ -27,14 +27,13 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 let selectedImageDataUrl = "";
 
 const elements = {
-  introScreen: document.querySelector("#introScreen"),
   setupScreen: document.querySelector("#setupScreen"),
   lectureScreen: document.querySelector("#lectureScreen"),
   reportScreen: document.querySelector("#reportScreen"),
   libraryScreen: document.querySelector("#libraryScreen"),
   lectureButton: document.querySelector("#lectureButton"),
   libraryButton: document.querySelector("#libraryButton"),
-  startExperienceButton: document.querySelector("#startExperienceButton"),
+  feedbackButton: document.querySelector("#feedbackButton"),
   saveNotice: document.querySelector("#saveNotice"),
   stageLabel: document.querySelector("#stageLabel"),
   turnCount: document.querySelector("#turnCount"),
@@ -42,6 +41,8 @@ const elements = {
   courseName: document.querySelector("#courseName"),
   taskContent: document.querySelector("#taskContent"),
   taskContentLabel: document.querySelector("#taskContentLabel"),
+  taskFormulaToolButton: document.querySelector("#taskFormulaToolButton"),
+  taskImageToolButton: document.querySelector("#taskImageToolButton"),
   conceptModeCard: document.querySelector("#conceptModeCard"),
   problemModeCard: document.querySelector("#problemModeCard"),
   sessionSummary: document.querySelector("#sessionSummary"),
@@ -65,6 +66,7 @@ const elements = {
   errorState: document.querySelector("#errorState"),
   formulaModal: document.querySelector("#formulaModal"),
   formulaField: document.querySelector("#formulaField"),
+  formulaModalHint: document.querySelector("#formulaModalHint"),
   insertFormulaButton: document.querySelector("#insertFormulaButton"),
   clearFormulaButton: document.querySelector("#clearFormulaButton"),
   closeFormulaButton: document.querySelector("#closeFormulaButton"),
@@ -89,6 +91,17 @@ const elements = {
   consentCheckbox: document.querySelector("#consentCheckbox"),
   confirmConsentButton: document.querySelector("#confirmConsentButton"),
   cancelConsentButton: document.querySelector("#cancelConsentButton"),
+  feedbackModal: document.querySelector("#feedbackModal"),
+  feedbackMessageInput: document.querySelector("#feedbackMessageInput"),
+  feedbackImageInput: document.querySelector("#feedbackImageInput"),
+  feedbackImagePreview: document.querySelector("#feedbackImagePreview"),
+  feedbackImageEmptyState: document.querySelector("#feedbackImageEmptyState"),
+  feedbackStatus: document.querySelector("#feedbackStatus"),
+  feedbackError: document.querySelector("#feedbackError"),
+  submitFeedbackButton: document.querySelector("#submitFeedbackButton"),
+  removeFeedbackImageButton: document.querySelector("#removeFeedbackImageButton"),
+  closeFeedbackButton: document.querySelector("#closeFeedbackButton"),
+  cancelFeedbackButton: document.querySelector("#cancelFeedbackButton"),
   librarySearch: document.querySelector("#librarySearch"),
   libraryList: document.querySelector("#libraryList"),
   libraryDetail: document.querySelector("#libraryDetail"),
@@ -97,13 +110,15 @@ const elements = {
 };
 
 let saveNoticeTimer = 0;
+let activeInsertTarget = null;
+let feedbackImageDataUrl = "";
 
 elements.taskForm.addEventListener("submit", startSession);
 elements.replyForm.addEventListener("submit", submitReply);
 elements.reportButton.addEventListener("click", finishSession);
-elements.startExperienceButton.addEventListener("click", startExperience);
 elements.lectureButton.addEventListener("click", resetSession);
 elements.libraryButton.addEventListener("click", openLibrary);
+elements.feedbackButton.addEventListener("click", openFeedbackModal);
 elements.saveDraftButton.addEventListener("click", () => saveCurrentToLibrary({ requireReport: false }));
 elements.resetButton.addEventListener("click", resetSession);
 elements.editSetupButton.addEventListener("click", editSetup);
@@ -113,8 +128,10 @@ elements.sampleConceptButton.addEventListener("click", fillConceptSample);
 elements.sampleProblemButton.addEventListener("click", fillProblemSample);
 elements.taskForm.addEventListener("input", updateSetupPreview);
 elements.taskForm.addEventListener("change", updateSetupPreview);
-elements.formulaToolButton.addEventListener("click", openFormulaModal);
-elements.imageToolButton.addEventListener("click", openImageModal);
+elements.taskFormulaToolButton.addEventListener("click", () => openFormulaModal(elements.taskContent));
+elements.taskImageToolButton.addEventListener("click", () => openImageModal(elements.taskContent));
+elements.formulaToolButton.addEventListener("click", () => openFormulaModal(elements.replyInput));
+elements.imageToolButton.addEventListener("click", () => openImageModal(elements.replyInput));
 elements.insertFormulaButton.addEventListener("click", insertFormula);
 elements.clearFormulaButton.addEventListener("click", clearFormula);
 elements.closeFormulaButton.addEventListener("click", closeFormulaModal);
@@ -128,9 +145,16 @@ elements.joinResearchButton.addEventListener("click", openConsentModal);
 elements.stopSyncButton.addEventListener("click", disableResearchSync);
 elements.confirmConsentButton.addEventListener("click", enableResearchSync);
 elements.cancelConsentButton.addEventListener("click", closeConsentModal);
+elements.feedbackImageInput.addEventListener("change", handleFeedbackImageSelection);
+elements.submitFeedbackButton.addEventListener("click", submitFeedback);
+elements.removeFeedbackImageButton.addEventListener("click", clearFeedbackImage);
+elements.closeFeedbackButton.addEventListener("click", closeFeedbackModal);
+elements.cancelFeedbackButton.addEventListener("click", closeFeedbackModal);
 elements.formulaModal.addEventListener("click", closeModalOnBackdrop);
 elements.imageModal.addEventListener("click", closeModalOnBackdrop);
 elements.consentModal.addEventListener("click", closeModalOnBackdrop);
+elements.feedbackModal.addEventListener("click", closeModalOnBackdrop);
+document.addEventListener("paste", handleImagePaste);
 elements.librarySearch.addEventListener("input", updateLibrarySearch);
 elements.libraryList.addEventListener("click", selectLibraryRecord);
 elements.libraryLoadButton.addEventListener("click", loadSelectedLibraryRecord);
@@ -164,6 +188,7 @@ function startSession(event) {
   renderFocusList();
   switchScreen("lecture");
   saveSession();
+  saveCurrentToLibrary({ silent: true });
   elements.replyInput.focus();
 }
 
@@ -199,6 +224,7 @@ async function submitReply(event) {
     renderConversation();
     renderFocusList();
     saveSession();
+    saveCurrentToLibrary({ silent: true });
   } catch (error) {
     showError(error.message);
   } finally {
@@ -225,9 +251,7 @@ async function finishSession() {
     });
     renderReport();
     switchScreen("report");
-    if (state.libraryId) {
-      saveCurrentToLibrary({ requireReport: true, silent: true });
-    }
+    saveCurrentToLibrary({ requireReport: true, silent: true });
     saveSession();
   } catch (error) {
     showError(error.message);
@@ -246,11 +270,6 @@ function editSetup() {
   populateSetupFromState();
   switchScreen("setup");
   saveSession();
-}
-
-function startExperience() {
-  resetSession();
-  elements.courseName.focus();
 }
 
 function appendUserMessage(text) {
@@ -279,8 +298,10 @@ function mergeObservations(newItems, resolvedIds) {
   state.observations.push(...incoming.filter((item) => item.description || item.question));
 }
 
-function openFormulaModal() {
+function openFormulaModal(targetInput = elements.replyInput) {
+  activeInsertTarget = targetInput;
   clearError();
+  updateModalCopy();
   elements.formulaModal.hidden = false;
   setupMathKeyboard();
   window.setTimeout(() => elements.formulaField.focus(), 0);
@@ -289,7 +310,7 @@ function openFormulaModal() {
 function closeFormulaModal() {
   elements.formulaModal.hidden = true;
   hideMathKeyboard();
-  elements.replyInput.focus();
+  focusActiveInsertTarget();
 }
 
 function clearFormula() {
@@ -304,7 +325,7 @@ function insertFormula() {
     return;
   }
 
-  insertIntoReply(`\\(${latex}\\)`);
+  insertIntoActiveInput(`\\(${latex}\\)`);
   closeFormulaModal();
 }
 
@@ -333,20 +354,63 @@ function hideMathKeyboard() {
   }
 }
 
-function openImageModal() {
+function openImageModal(targetInput = elements.replyInput) {
+  activeInsertTarget = targetInput;
   clearError();
+  updateModalCopy();
   resetImageRecognition();
   elements.imageModal.hidden = false;
+  window.setTimeout(() => elements.imageModal.focus(), 0);
 }
 
 function closeImageModal() {
   elements.imageModal.hidden = true;
   clearImageMessages();
-  elements.replyInput.focus();
+  focusActiveInsertTarget();
 }
 
 function handleImageSelection(event) {
-  const file = event.target.files?.[0];
+  loadImageFile(event.target.files?.[0] || null);
+}
+
+function handleImagePaste(event) {
+  const file = getClipboardImageFile(event.clipboardData);
+  if (!file) return;
+
+  if (!elements.feedbackModal.hidden) {
+    event.preventDefault();
+    loadFeedbackImageFile(file, { source: "paste" });
+    return;
+  }
+
+  const pasteTarget = getImagePasteTarget(event.target);
+  if (pasteTarget) {
+    openImageModal(pasteTarget);
+  } else if (elements.imageModal.hidden) {
+    return;
+  }
+
+  event.preventDefault();
+  loadImageFile(file, { source: pasteTarget ? "direct-paste" : "paste" });
+}
+
+function getImagePasteTarget(target) {
+  if (target === elements.taskContent) return elements.taskContent;
+  if (target === elements.replyInput) return elements.replyInput;
+  return null;
+}
+
+function getClipboardImageFile(clipboardData) {
+  const files = Array.from(clipboardData?.files || []);
+  const file = files.find((item) => item.type.startsWith("image/"));
+  if (file) return file;
+
+  const items = Array.from(clipboardData?.items || []);
+  const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
+  return imageItem?.getAsFile() || null;
+}
+
+function loadImageFile(file, options = {}) {
   clearImageMessages();
   selectedImageDataUrl = "";
   elements.recognizedTextInput.value = "";
@@ -376,6 +440,9 @@ function handleImageSelection(event) {
     elements.imagePreview.hidden = false;
     elements.imageEmptyState.hidden = true;
     elements.recognizeImageButton.disabled = false;
+    if (options.source === "paste" || options.source === "direct-paste") {
+      showImageStatus("已粘贴图片，可以开始识别。");
+    }
   };
   reader.onerror = () => {
     showImageError("图片读取失败，请换一张图片再试。");
@@ -394,12 +461,12 @@ async function recognizeSelectedImage() {
 
   try {
     const result = await postJson("/api/recognize-image", {
-      task: state.task,
+      task: getRecognitionTask(),
       imageDataUrl: selectedImageDataUrl,
       hint: sanitize(elements.imageHintInput.value),
     });
     elements.recognizedTextInput.value = formatRecognitionResult(result);
-    showImageStatus("识别完成。请先检查并修改，再插入讲解。");
+    showImageStatus(`识别完成。请先检查并修改，再插入${getActiveInsertLabel()}。`);
   } catch (error) {
     showImageError(`${error.message || "图片识别失败。"} 可以改用文字描述图像或公式。`);
   } finally {
@@ -454,13 +521,14 @@ function insertRecognizedText() {
     return;
   }
 
-  const prefix = elements.replyInput.value.trim() ? "\n\n[图片识别结果]\n" : "[图片识别结果]\n";
-  insertIntoReply(`${prefix}${text}`);
+  const target = getActiveInsertTarget();
+  const prefix = target.value.trim() ? "\n\n[图片识别结果]\n" : "[图片识别结果]\n";
+  insertIntoActiveInput(`${prefix}${text}`);
   closeImageModal();
 }
 
-function insertIntoReply(text) {
-  const input = elements.replyInput;
+function insertIntoActiveInput(text) {
+  const input = getActiveInsertTarget();
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
   const before = input.value.slice(0, start);
@@ -469,6 +537,42 @@ function insertIntoReply(text) {
   const cursor = start + text.length;
   input.focus();
   input.setSelectionRange(cursor, cursor);
+  if (input === elements.taskContent) updateSetupPreview();
+}
+
+function getActiveInsertTarget() {
+  return activeInsertTarget === elements.taskContent ? elements.taskContent : elements.replyInput;
+}
+
+function focusActiveInsertTarget() {
+  getActiveInsertTarget().focus();
+}
+
+function getActiveInsertLabel() {
+  if (getActiveInsertTarget() !== elements.taskContent) return "讲解";
+  return getSelectedTaskType() === "题目讲解" ? "题目" : "知识点";
+}
+
+function updateModalCopy() {
+  const label = getActiveInsertLabel();
+  elements.formulaModalHint.innerHTML = `插入后会以 LaTeX 形式进入${escapeHtml(label)}，例如 <span>\\( f'(x)=0 \\)</span>。`;
+  elements.insertFormulaButton.textContent = `插入${label}`;
+  elements.insertRecognizedButton.textContent = `插入${label}`;
+}
+
+function getSelectedTaskType() {
+  const form = new FormData(elements.taskForm);
+  return form.get("taskType") === "题目讲解" ? "题目讲解" : "知识点讲解";
+}
+
+function getRecognitionTask() {
+  if (getActiveInsertTarget() !== elements.taskContent && state.task) return state.task;
+
+  return {
+    courseName: sanitize(elements.courseName.value) || "未命名学科",
+    taskType: getSelectedTaskType(),
+    taskContent: sanitize(elements.taskContent.value) || "当前主题",
+  };
 }
 
 function resetImageRecognition(clearFile = true) {
@@ -512,19 +616,161 @@ function clearImageMessages() {
 function closeModalOnBackdrop(event) {
   if (event.target === elements.formulaModal) closeFormulaModal();
   if (event.target === elements.imageModal) closeImageModal();
-  if (event.target === elements.consentModal) closeConsentModal();
+  if (event.target === elements.consentModal && hasParticipant()) closeConsentModal();
+  if (event.target === elements.feedbackModal) closeFeedbackModal();
 }
 
 function openConsentModal() {
   clearError();
-  elements.consentCheckbox.checked = false;
+  elements.consentCheckbox.checked = hasParticipant();
   elements.confirmConsentButton.disabled = false;
   elements.consentModal.hidden = false;
 }
 
 function closeConsentModal() {
+  if (!hasParticipant()) {
+    showSaveNotice("请先授权同步并生成访问码，再开始测评。");
+    return;
+  }
+
   elements.consentModal.hidden = true;
   elements.consentCheckbox.checked = false;
+}
+
+function openFeedbackModal() {
+  if (!hasParticipant()) {
+    openConsentModal();
+    showSaveNotice("请先授权同步并生成访问码，再提交反馈。");
+    return;
+  }
+
+  clearFeedbackMessages();
+  elements.feedbackModal.hidden = false;
+  window.setTimeout(() => elements.feedbackMessageInput.focus(), 0);
+}
+
+function closeFeedbackModal() {
+  elements.feedbackModal.hidden = true;
+  clearFeedbackMessages();
+}
+
+function handleFeedbackImageSelection(event) {
+  loadFeedbackImageFile(event.target.files?.[0] || null);
+}
+
+function loadFeedbackImageFile(file, options = {}) {
+  clearFeedbackMessages();
+  clearFeedbackImage();
+
+  if (!file) return;
+
+  if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+    showFeedbackError("请选择 png、jpg、jpeg 或 webp 图片。");
+    elements.feedbackImageInput.value = "";
+    return;
+  }
+
+  if (file.size > MAX_IMAGE_BYTES) {
+    showFeedbackError("图片不能超过 5MB。可以先裁剪或压缩后再上传。");
+    elements.feedbackImageInput.value = "";
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    feedbackImageDataUrl = String(reader.result || "");
+    elements.feedbackImagePreview.src = feedbackImageDataUrl;
+    elements.feedbackImagePreview.hidden = false;
+    elements.feedbackImageEmptyState.hidden = true;
+    elements.removeFeedbackImageButton.disabled = false;
+    if (options.source === "paste") {
+      showFeedbackStatus("已粘贴截图。");
+    }
+  };
+  reader.onerror = () => {
+    showFeedbackError("图片读取失败，请换一张图片再试。");
+  };
+  reader.readAsDataURL(file);
+}
+
+async function submitFeedback() {
+  if (!hasParticipant()) {
+    openConsentModal();
+    showSaveNotice("请先授权同步并生成访问码，再提交反馈。");
+    return;
+  }
+
+  const message = sanitize(elements.feedbackMessageInput.value);
+  if (!message && !feedbackImageDataUrl) {
+    flashMissingInput([elements.feedbackMessageInput]);
+    showFeedbackError("请写下反馈内容，或粘贴一张问题截图。");
+    return;
+  }
+
+  setFeedbackBusy(true, "正在提交反馈...");
+
+  try {
+    await postJson(
+      "/api/feedback",
+      {
+        message,
+        imageDataUrl: feedbackImageDataUrl,
+        context: {
+          screen: state.screen,
+          url: window.location.href,
+          userAgent: navigator.userAgent,
+          task: state.task,
+        },
+      },
+      { headers: participantHeaders() },
+    );
+    elements.feedbackMessageInput.value = "";
+    clearFeedbackImage();
+    showFeedbackStatus("反馈已提交。谢谢你帮我们把产品打磨得更好。");
+    showSaveNotice("反馈已同步到后台。");
+  } catch (error) {
+    showFeedbackError(error.message || "反馈提交失败，请稍后再试。");
+  } finally {
+    setFeedbackBusy(false);
+  }
+}
+
+function clearFeedbackImage() {
+  feedbackImageDataUrl = "";
+  elements.feedbackImageInput.value = "";
+  elements.feedbackImagePreview.hidden = true;
+  elements.feedbackImagePreview.removeAttribute("src");
+  elements.feedbackImageEmptyState.hidden = false;
+  elements.removeFeedbackImageButton.disabled = true;
+}
+
+function setFeedbackBusy(isBusy, message = "") {
+  elements.submitFeedbackButton.disabled = isBusy;
+  elements.feedbackMessageInput.disabled = isBusy;
+  elements.feedbackImageInput.disabled = isBusy;
+  elements.removeFeedbackImageButton.disabled = isBusy || !feedbackImageDataUrl;
+  if (message) showFeedbackStatus(message);
+}
+
+function showFeedbackStatus(message) {
+  elements.feedbackStatus.hidden = false;
+  elements.feedbackStatus.textContent = message;
+  elements.feedbackError.hidden = true;
+  elements.feedbackError.textContent = "";
+}
+
+function showFeedbackError(message) {
+  elements.feedbackError.hidden = false;
+  elements.feedbackError.textContent = message;
+  elements.feedbackStatus.hidden = true;
+  elements.feedbackStatus.textContent = "";
+}
+
+function clearFeedbackMessages() {
+  elements.feedbackStatus.hidden = true;
+  elements.feedbackStatus.textContent = "";
+  elements.feedbackError.hidden = true;
+  elements.feedbackError.textContent = "";
 }
 
 async function enableResearchSync() {
@@ -545,7 +791,7 @@ async function enableResearchSync() {
     state.participant = participant;
     localStorage.setItem(PARTICIPANT_STORAGE_KEY, JSON.stringify(participant));
     closeConsentModal();
-    showSaveNotice(`匿名同步已开启。你的测试码是 ${participant.participantCode}。`);
+    showSaveNotice(`授权完成。你的唯一访问码是 ${participant.participantCode}。`);
     await syncAllLibraryRecords();
   } catch (error) {
     showSaveNotice(error.message || "匿名同步开启失败，请稍后再试。");
@@ -556,10 +802,8 @@ async function enableResearchSync() {
 }
 
 function disableResearchSync() {
-  state.participant = null;
-  localStorage.removeItem(PARTICIPANT_STORAGE_KEY);
-  updatePrivacyBanner();
-  showSaveNotice("已切换为仅本机保存。后台不会看到后续知识库记录。");
+  openConsentModal();
+  showSaveNotice("本次测评需要授权同步后继续。");
 }
 
 function restoreResearchIdentity() {
@@ -586,23 +830,27 @@ function restoreResearchIdentity() {
 function updatePrivacyBanner() {
   elements.privacyBanner.hidden = false;
   const participant = state.participant;
-  const isSynced = Boolean(participant?.participantId && participant?.participantSecret);
+  const isSynced = hasParticipant();
   elements.joinResearchButton.hidden = isSynced;
-  elements.stopSyncButton.hidden = !isSynced;
+  elements.stopSyncButton.hidden = true;
   elements.joinResearchButton.disabled = state.syncBusy;
   elements.stopSyncButton.disabled = state.syncBusy;
 
   if (state.syncBusy) {
     elements.researchStatus.textContent = "正在同步到调研后台...";
   } else if (isSynced) {
-    elements.researchStatus.textContent = `已开启同步，匿名测试码：${participant.participantCode || participant.participantId}`;
+    elements.researchStatus.textContent = `已授权同步，唯一访问码：${participant.participantCode || participant.participantId}`;
   } else {
-    elements.researchStatus.textContent = "仅保存在本机，后台暂不可见。";
+    elements.researchStatus.textContent = "请先授权同步并生成访问码。";
   }
 }
 
-async function syncLibraryRecord(record) {
-  if (!state.participant?.participantId || !state.participant?.participantSecret) return;
+function hasParticipant() {
+  return Boolean(state.participant?.participantId && state.participant?.participantSecret);
+}
+
+async function syncLibraryRecord(record, options = {}) {
+  if (!hasParticipant()) return;
 
   state.syncBusy = true;
   updatePrivacyBanner();
@@ -615,9 +863,9 @@ async function syncLibraryRecord(record) {
         headers: participantHeaders(),
       },
     );
-    showSaveNotice("已保存到个人知识库，并同步到调研后台。");
+    if (!options.silent) showSaveNotice("已保存到个人知识库，并同步到调研后台。");
   } catch (error) {
-    showSaveNotice(`已保存在本机，但同步后台失败：${error.message || "网络异常"}`);
+    if (!options.silent) showSaveNotice(`已保存在本机，但同步后台失败：${error.message || "网络异常"}`);
   } finally {
     state.syncBusy = false;
     updatePrivacyBanner();
@@ -632,7 +880,7 @@ async function syncAllLibraryRecords() {
 }
 
 async function deleteRemoteLibraryRecord(recordId) {
-  if (!state.participant?.participantId || !state.participant?.participantSecret) return;
+  if (!hasParticipant()) return;
 
   try {
     await fetch(`${API_BASE}/api/library/${encodeURIComponent(recordId)}`, {
@@ -679,9 +927,9 @@ function buildFirstQuestion(task) {
 }
 
 function switchScreen(screen) {
+  if (screen === "intro") screen = "setup";
+
   state.screen = screen;
-  document.body.classList.toggle("intro-active", screen === "intro");
-  elements.introScreen.classList.toggle("active", screen === "intro");
   elements.setupScreen.classList.toggle("active", screen === "setup");
   elements.lectureScreen.classList.toggle("active", screen === "lecture");
   elements.reportScreen.classList.toggle("active", screen === "report");
@@ -690,9 +938,7 @@ function switchScreen(screen) {
     elements.stageLabel.textContent =
       screen === "setup"
         ? "创建学习会话"
-        : screen === "intro"
-          ? "产品介绍"
-          : screen === "lecture"
+        : screen === "lecture"
           ? "正式讲解"
           : screen === "report"
             ? "诊断报告"
@@ -855,7 +1101,7 @@ function saveCurrentToLibrary({ requireReport = false, silent = false } = {}) {
   state.libraryId = id;
   state.activeLibraryId = id;
   saveLibrary();
-  void syncLibraryRecord(record);
+  void syncLibraryRecord(record, { silent });
   updateSaveButtons();
   saveSession();
 
@@ -1398,13 +1644,14 @@ function restoreSession() {
   if (!raw) {
     updateSetupPreview();
     updateSaveButtons();
-    switchScreen("intro");
+    switchScreen("setup");
+    ensureConsentGate();
     return;
   }
 
   try {
     const saved = JSON.parse(raw);
-    state.screen = saved.screen || "intro";
+    state.screen = saved.screen === "intro" ? "setup" : saved.screen || "setup";
     state.task = saved.task;
     state.messages = saved.messages || [];
     state.observations = saved.observations || [];
@@ -1435,9 +1682,6 @@ function restoreSession() {
       renderFocusList();
       if (state.screen === "report") renderReport();
       switchScreen(state.screen);
-    } else if (state.screen === "intro") {
-      updateSetupPreview();
-      switchScreen("intro");
     } else {
       updateSetupPreview();
       switchScreen("setup");
@@ -1445,7 +1689,15 @@ function restoreSession() {
   } catch {
     localStorage.removeItem(SESSION_STORAGE_KEY);
     updateSetupPreview();
-    switchScreen("intro");
+    switchScreen("setup");
+  }
+
+  ensureConsentGate();
+}
+
+function ensureConsentGate() {
+  if (!hasParticipant()) {
+    openConsentModal();
   }
 }
 
