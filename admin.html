@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>调研后台 · AI费曼教室</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">研</div>
+          <div>
+            <p class="eyebrow">调研后台</p>
+            <h1>匿名测评数据</h1>
+            <p class="product-subtitle">按匿名测试码查看用户知识库、讲解记录和诊断报告。</p>
+          </div>
+        </div>
+        <nav class="app-nav" aria-label="后台导航">
+          <a class="nav-button nav-link" href="./index.html">返回应用</a>
+        </nav>
+      </header>
+
+      <main class="admin-shell">
+        <section class="admin-login-panel">
+          <div class="section-heading">
+            <p class="eyebrow">管理员访问</p>
+            <h2>输入后台令牌</h2>
+          </div>
+          <div class="admin-token-row">
+            <input id="adminTokenInput" type="password" placeholder="ADMIN_TOKEN" autocomplete="current-password" />
+            <button id="loadAdminButton" class="primary-button" type="button">加载数据</button>
+          </div>
+          <div id="adminStatus" class="save-notice" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="adminStats" class="admin-stats" aria-live="polite"></section>
+        <section id="adminRecords" class="admin-records" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <script src="./admin.js"></script>
+  </body>
+</html>

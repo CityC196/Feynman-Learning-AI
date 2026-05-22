@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI费曼教室</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="intro-active">
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">讲</div>
+          <div>
+            <p class="eyebrow">AI费曼教室</p>
+            <h1>AI费曼教室</h1>
+            <p class="product-subtitle">把知识讲给 AI 学生，发现自己哪里没讲明白</p>
+          </div>
+        </div>
+        <nav class="app-nav" aria-label="主导航">
+          <button id="lectureButton" class="nav-button" type="button">新的讲解</button>
+          <button id="libraryButton" class="nav-button" type="button">个人知识库</button>
+          <a class="nav-button nav-link" href="./admin.html">调研后台</a>
+        </nav>
+      </header>
+      <div id="saveNotice" class="save-notice" hidden aria-live="polite"></div>
+      <section id="privacyBanner" class="privacy-banner" hidden>
+        <div>
+          <strong>匿名测评同步</strong>
+          <span id="researchStatus">仅保存在本机，后台暂不可见。</span>
+        </div>
+        <div class="privacy-actions">
+          <button id="joinResearchButton" class="secondary-button" type="button">同意并开启同步</button>
+          <button id="stopSyncButton" class="ghost-button" type="button">仅本机保存</button>
+        </div>
+      </section>
+
+      <main>
+        <section id="introScreen" class="screen active" aria-label="AI费曼教室">
+          <div class="intro-hero">
+            <button id="startExperienceButton" class="intro-product-name" type="button">AI费曼教室</button>
+          </div>
+        </section>
+
+        <section id="setupScreen" class="screen" aria-labelledby="setupTitle">
+          <div class="setup-layout">
+            <form id="taskForm" class="setup-panel">
+              <div class="section-heading">
+                <p class="eyebrow">新的讲解</p>
+                <h2 id="setupTitle">先定一个要讲明白的主题</h2>
+                <p class="section-subtitle">选择知识点或题目，然后开始把它讲给 AI 学生听。</p>
+              </div>
+
+              <div class="form-grid">
+                <label>
+                  <span>学科</span>
+                  <input
+                    id="courseName"
+                    name="courseName"
+                    type="text"
+                    placeholder="高等数学 / 大学物理 / 电路原理"
+                    autocomplete="off"
+                  />
+                </label>
+
+                <fieldset class="segmented-control">
+                  <legend>讲解模式</legend>
+                  <label>
+                    <input type="radio" name="taskType" value="知识点讲解" checked />
+                    <span>知识点</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="taskType" value="题目讲解" />
+                    <span>题目</span>
+                  </label>
+                </fieldset>
+
+                <label class="wide-field">
+                  <span id="taskContentLabel">知识点</span>
+                  <textarea
+                    id="taskContent"
+                    name="taskContent"
+                    rows="6"
+                    placeholder="如：弯矩与正应力关系"
+                  ></textarea>
+                </label>
+              </div>
+
+              <div class="button-row">
+                <button class="primary-button" type="submit">进入讲解</button>
+                <button id="sampleConceptButton" class="secondary-button" type="button">知识点示例</button>
+                <button id="sampleProblemButton" class="secondary-button" type="button">题目示例</button>
+              </div>
+            </form>
+
+            <aside class="preview-panel">
+              <div class="section-heading">
+                <p class="eyebrow">任务预览</p>
+                <h2>讲解类型</h2>
+              </div>
+              <div class="mode-card active" id="conceptModeCard">
+                <strong>知识点讲解</strong>
+                <p>适合定理、公式、概念和推导。AI 学生会追问定义、变量、条件、来源和例子。</p>
+              </div>
+              <div class="mode-card" id="problemModeCard">
+                <strong>题目讲解</strong>
+                <p>适合解题过程复盘。AI 学生会追问题意、建模、公式依据、边界条件和结果解释。</p>
+              </div>
+              <div class="preview-lines">
+                <span>学科：待输入</span>
+                <span>主题：待输入</span>
+                <span>模式：知识点讲解</span>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="lectureScreen" class="screen" aria-labelledby="lectureTitle">
+          <div class="lecture-layout">
+            <aside class="session-panel">
+              <div class="section-heading">
+                <p class="eyebrow">讲解控制台</p>
+                <h2>当前主题</h2>
+              </div>
+              <div id="sessionSummary" class="summary-list"></div>
+
+              <div class="section-heading compact">
+                <p class="eyebrow">AI 学生没听懂的地方</p>
+                <h2>追问记录</h2>
+              </div>
+              <div id="focusList" class="focus-list">
+                <p class="muted">暂无观察。</p>
+              </div>
+            </aside>
+
+            <section class="conversation-panel" aria-labelledby="lectureTitle">
+              <div class="panel-toolbar">
+                <div class="section-heading">
+                  <p class="eyebrow">讲给 AI 学生</p>
+                  <h2 id="lectureTitle">讲解工作区</h2>
+                </div>
+                <div class="toolbar-actions">
+                  <button id="saveDraftButton" class="ghost-button" type="button">保存记录</button>
+                  <button id="editSetupButton" class="ghost-button" type="button">修改任务</button>
+                  <button id="resetButton" class="ghost-button" type="button">重置</button>
+                </div>
+              </div>
+
+              <div id="conversation" class="conversation"></div>
+
+              <form id="replyForm" class="reply-form">
+                <div class="reply-input-header">
+                  <label for="replyInput">你的讲解</label>
+                  <div class="input-tools" aria-label="讲解输入辅助工具">
+                    <button id="formulaToolButton" class="tool-button" type="button">公式</button>
+                    <button id="imageToolButton" class="tool-button" type="button">识别图片</button>
+                  </div>
+                </div>
+                <textarea id="replyInput" rows="5" placeholder="输入讲解内容"></textarea>
+                <div id="loadingState" class="loading-state" hidden>AI 学生正在思考...</div>
+                <div id="errorState" class="error-state" hidden></div>
+                <div class="button-row">
+                  <button id="submitReplyButton" class="primary-button" type="submit">提交讲解</button>
+                  <button id="reportButton" class="secondary-button" type="button">结束并生成报告</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="reportScreen" class="screen" aria-labelledby="reportTitle">
+          <div class="report-layout">
+            <div class="report-topline">
+              <div class="section-heading">
+                <p class="eyebrow">理解复盘</p>
+                <h2 id="reportTitle">讲解诊断报告</h2>
+                <p class="section-subtitle">把本次讲解中没讲透、已经讲清楚和下一轮要重讲的部分整理出来。</p>
+              </div>
+              <div class="button-row">
+                <button id="saveReportButton" class="primary-button" type="button">存入知识库</button>
+                <button id="continueButton" class="secondary-button" type="button">继续讲解</button>
+              </div>
+            </div>
+            <div id="reportPanel" class="report-panel"></div>
+          </div>
+        </section>
+
+        <section id="libraryScreen" class="screen" aria-labelledby="libraryTitle">
+          <div class="library-layout">
+            <aside class="library-sidebar">
+              <div class="section-heading">
+                <p class="eyebrow">个人知识库</p>
+                <h2 id="libraryTitle">学习档案</h2>
+              </div>
+
+              <label class="library-search">
+                <span>搜索</span>
+                <input id="librarySearch" type="search" placeholder="按学科、知识点或报告内容搜索" autocomplete="off" />
+              </label>
+
+              <fieldset class="segmented-control three library-filter">
+                <legend>记录类型</legend>
+                <label>
+                  <input type="radio" name="libraryFilter" value="all" checked />
+                  <span>全部</span>
+                </label>
+                <label>
+                  <input type="radio" name="libraryFilter" value="concept" />
+                  <span>知识点</span>
+                </label>
+                <label>
+                  <input type="radio" name="libraryFilter" value="problem" />
+                  <span>题目</span>
+                </label>
+              </fieldset>
+
+              <div id="libraryList" class="library-list"></div>
+            </aside>
+
+            <section class="library-detail-panel" aria-live="polite">
+              <div class="library-detail-toolbar">
+                <div class="section-heading">
+                  <p class="eyebrow">记录详情</p>
+                  <h2>问答记录与报告</h2>
+                </div>
+                <div class="button-row">
+                  <button id="libraryLoadButton" class="primary-button" type="button">进入知识点</button>
+                  <button id="libraryDeleteButton" class="ghost-button" type="button">删除这条记录</button>
+                </div>
+              </div>
+              <div id="libraryDetail" class="library-detail"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="consentModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="consentModalTitle" hidden>
+      <section class="modal-card consent-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">匿名测评同步</p>
+            <h2 id="consentModalTitle">允许同步学习记录到调研后台</h2>
+          </div>
+        </div>
+
+        <div class="consent-copy">
+          <p>开启后，系统会把你的讲解内容、AI 追问、诊断报告和个人知识库记录同步到后台，用于产品调研和学习效果分析。</p>
+          <p>系统会使用匿名测试码，不要求填写姓名、手机号或学校。你仍然可以选择仅保存在本机。</p>
+        </div>
+
+        <label class="consent-check">
+          <input id="consentCheckbox" type="checkbox" />
+          <span>我已了解并同意将本次测评数据以匿名测试码同步到调研后台。</span>
+        </label>
+
+        <div class="button-row">
+          <button id="confirmConsentButton" class="primary-button" type="button">开启匿名同步</button>
+          <button id="cancelConsentButton" class="ghost-button" type="button">暂不开启</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="formulaModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="formulaModalTitle" hidden>
+      <section class="modal-card formula-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">公式输入</p>
+            <h2 id="formulaModalTitle">输入公式</h2>
+          </div>
+          <button id="closeFormulaButton" class="ghost-button" type="button" aria-label="关闭公式输入">关闭</button>
+        </div>
+
+        <math-field id="formulaField" math-virtual-keyboard-policy="manual"></math-field>
+        <p class="modal-hint">插入后会以 LaTeX 形式进入讲解，例如 <span>\( f'(x)=0 \)</span>。</p>
+
+        <div class="button-row">
+          <button id="insertFormulaButton" class="primary-button" type="button">插入公式</button>
+          <button id="clearFormulaButton" class="secondary-button" type="button">清空</button>
+          <button id="cancelFormulaButton" class="ghost-button" type="button">取消</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="imageModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="imageModalTitle" hidden>
+      <section class="modal-card image-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">图片识别</p>
+            <h2 id="imageModalTitle">识别手写公式或草图</h2>
+          </div>
+          <button id="closeImageButton" class="ghost-button" type="button" aria-label="关闭图片识别">关闭</button>
+        </div>
+
+        <div class="image-recognition-grid">
+          <label class="upload-box">
+            <span>选择图片</span>
+            <input id="imageUploadInput" type="file" accept="image/png,image/jpeg,image/webp" />
+          </label>
+          <div class="image-preview-box">
+            <img id="imagePreview" alt="待识别图片预览" hidden />
+            <p id="imageEmptyState" class="muted">支持 png、jpg、jpeg、webp，单张不超过 5MB。</p>
+          </div>
+        </div>
+
+        <label class="hint-field">
+          <span>补充说明（可选）</span>
+          <input id="imageHintInput" type="text" placeholder="如：这是受力图 / 这是证明中的公式" autocomplete="off" />
+        </label>
+
+        <div id="imageStatus" class="loading-state" hidden></div>
+        <div id="imageError" class="error-state" hidden></div>
+
+        <label class="recognized-field">
+          <span>识别结果（可编辑）</span>
+          <textarea id="recognizedTextInput" rows="7" placeholder="识别后会显示可编辑文本"></textarea>
+        </label>
+
+        <div class="button-row">
+          <button id="recognizeImageButton" class="secondary-button" type="button" disabled>开始识别</button>
+          <button id="insertRecognizedButton" class="primary-button" type="button">插入讲解</button>
+          <button id="cancelImageButton" class="ghost-button" type="button">取消</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="./node_modules/mathlive/mathlive.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

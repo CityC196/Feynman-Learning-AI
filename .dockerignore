@@ -1,0 +1,11 @@
+node_modules
+.git
+.cache
+.npm-cache
+data
+*.log
+.env
+.env.*
+!.env.example
+server.out.log
+server.err.log

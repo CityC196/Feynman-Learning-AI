@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: ai-fei-man-jiao-shi
+    env: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: research-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATA_DIR
+        value: /var/data
+      - key: ZHIPU_API_KEY
+        sync: false
+      - key: ZHIPU_MODEL
+        value: glm-5.1
+      - key: ZHIPU_VISION_MODEL
+        value: glm-4.5v
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 600000
+      - key: RATE_LIMIT_MAX
+        value: 120
