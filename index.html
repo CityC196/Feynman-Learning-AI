@@ -14,7 +14,7 @@
             <h1>AI费曼教室</h1>
           </div>
           <button id="lectureButton" class="sidebar-primary-button" type="button">新对话</button>
-          <button id="feedbackButton" class="sidebar-action-button" type="button">我的反馈</button>
+          <button id="feedbackButton" class="sidebar-action-button" type="button">反馈</button>
         </div>
 
         <section class="sidebar-history" aria-labelledby="conversationHistoryTitle">
@@ -235,6 +235,69 @@
             </section>
           </div>
         </section>
+
+        <section id="feedbackScreen" class="screen" aria-labelledby="feedbackTitle">
+          <div class="feedback-layout">
+            <div class="feedback-topline">
+              <div class="section-heading">
+                <p class="eyebrow">反馈流程</p>
+                <h2 id="feedbackTitle">告诉我们真实体验</h2>
+                <p class="section-subtitle">你的反馈会和当前用户的对话记录一起进入调研后台。</p>
+              </div>
+              <button id="feedbackBackButton" class="ghost-button" type="button">返回</button>
+            </div>
+
+            <form id="feedbackForm" class="feedback-flow-panel">
+              <section class="feedback-step">
+                <div class="feedback-step-marker">1</div>
+                <label class="feedback-step-body">
+                  <span>您的联系方式？<small>选填，用于联系您支付测评报酬</small></span>
+                  <input id="feedbackContactInput" type="text" placeholder="微信 / 手机号 / 邮箱" autocomplete="off" />
+                </label>
+              </section>
+
+              <section class="feedback-step">
+                <div class="feedback-step-marker">2</div>
+                <label class="feedback-step-body">
+                  <span>您愿意为本产品每月支付的订阅费用？<small>必填</small></span>
+                  <div class="price-input-row">
+                    <input id="feedbackSubscriptionInput" type="number" min="0" step="1" inputmode="decimal" placeholder="如：19" required />
+                    <strong>元 / 月</strong>
+                  </div>
+                </label>
+              </section>
+
+              <section class="feedback-step">
+                <div class="feedback-step-marker">3</div>
+                <div class="feedback-step-body">
+                  <label class="recognized-field">
+                    <span>您的体验感受、需求与对我们的建议？<small>必填，可上传多张截图</small></span>
+                    <textarea id="feedbackMessageInput" rows="7" placeholder="哪里不好用、哪些功能真正有帮助、你希望我们下一步怎么改"></textarea>
+                  </label>
+
+                  <div class="feedback-image-grid">
+                    <label class="upload-box compact">
+                      <span>上传或粘贴截图</span>
+                      <input id="feedbackImageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                    </label>
+                    <div class="image-preview-box compact">
+                      <div id="feedbackImagePreviewList" class="feedback-preview-list" hidden></div>
+                      <p id="feedbackImageEmptyState" class="muted">可多选上传，也可直接粘贴多张截图，单张不超过 5MB。</p>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div id="feedbackStatus" class="loading-state" hidden></div>
+              <div id="feedbackError" class="error-state" hidden></div>
+
+              <div class="button-row">
+                <button id="submitFeedbackButton" class="primary-button" type="submit">提交反馈</button>
+                <button id="removeFeedbackImageButton" class="secondary-button" type="button" disabled>移除全部截图</button>
+              </div>
+            </form>
+          </div>
+        </section>
         </main>
       </div>
     </div>
@@ -324,43 +387,6 @@
           <button id="recognizeImageButton" class="secondary-button" type="button" disabled>开始识别</button>
           <button id="insertRecognizedButton" class="primary-button" type="button">插入讲解</button>
           <button id="cancelImageButton" class="ghost-button" type="button">取消</button>
-        </div>
-      </section>
-    </div>
-
-    <div id="feedbackModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="feedbackModalTitle" tabindex="-1" hidden>
-      <section class="modal-card feedback-card">
-        <div class="modal-header">
-          <div>
-            <p class="eyebrow">我的反馈</p>
-            <h2 id="feedbackModalTitle">告诉我们你遇到的问题</h2>
-          </div>
-          <button id="closeFeedbackButton" class="ghost-button" type="button" aria-label="关闭反馈">关闭</button>
-        </div>
-
-        <label class="recognized-field">
-          <span>反馈内容</span>
-          <textarea id="feedbackMessageInput" rows="6" placeholder="哪里不好用、哪里出错了，或你希望怎么改"></textarea>
-        </label>
-
-        <div class="feedback-image-grid">
-          <label class="upload-box compact">
-            <span>上传或粘贴截图</span>
-            <input id="feedbackImageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-          </label>
-          <div class="image-preview-box compact">
-            <div id="feedbackImagePreviewList" class="feedback-preview-list" hidden></div>
-            <p id="feedbackImageEmptyState" class="muted">可多选上传，也可直接粘贴多张截图，单张不超过 5MB。</p>
-          </div>
-        </div>
-
-        <div id="feedbackStatus" class="loading-state" hidden></div>
-        <div id="feedbackError" class="error-state" hidden></div>
-
-        <div class="button-row">
-          <button id="submitFeedbackButton" class="primary-button" type="button">提交反馈</button>
-          <button id="removeFeedbackImageButton" class="secondary-button" type="button" disabled>移除全部截图</button>
-          <button id="cancelFeedbackButton" class="ghost-button" type="button">取消</button>
         </div>
       </section>
     </div>

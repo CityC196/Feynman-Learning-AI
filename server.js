@@ -428,17 +428,25 @@ function requireAdmin(request) {
 function createFeedback(payload, request) {
   const now = new Date().toISOString();
   const participant = requireParticipant(request);
+  const contact = stringOrDefault(payload?.contact, "").slice(0, 240);
+  const subscriptionFee = normalizeSubscriptionFee(payload?.subscriptionFee ?? payload?.monthlySubscriptionFee);
   const message = stringOrDefault(payload?.message, "").slice(0, 4000);
   const imageDataUrls = normalizeFeedbackImageDataUrls(payload);
 
-  if (!message && !imageDataUrls.length) {
-    throw httpError(400, "请先写下反馈内容，或粘贴一张问题截图。");
+  if (!subscriptionFee) {
+    throw httpError(400, "请填写愿意每月支付的订阅费用。");
+  }
+
+  if (!message) {
+    throw httpError(400, "请写下体验感受、需求或建议。");
   }
 
   imageDataUrls.forEach(validateImageDataUrl);
 
   const feedback = {
     id: createId("feedback"),
+    contact,
+    subscriptionFee,
     message,
     imageDataUrl: imageDataUrls[0] || "",
     imageDataUrls,
@@ -451,12 +459,25 @@ function createFeedback(payload, request) {
   };
 
   store.feedbackRecords.unshift(feedback);
+  participant.updatedAt = now;
   persistStore();
 
   return {
     ok: true,
     feedbackId: feedback.id,
   };
+}
+
+function normalizeSubscriptionFee(value) {
+  const text = stringOrDefault(value, "").slice(0, 80);
+  if (!text) return "";
+
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw httpError(400, "订阅费用需要是大于等于 0 的数字。");
+  }
+
+  return String(Math.round(amount * 100) / 100);
 }
 
 function normalizeFeedbackImageDataUrls(payload) {
@@ -517,6 +538,8 @@ function getAdminRecords() {
   const records = store.libraryRecords.slice().sort(sortByUpdatedAtDesc);
   const feedbackRecords = store.feedbackRecords.slice().sort(sortByCreatedAtDesc);
   const participantMap = new Map(store.participants.map((item) => [item.id, item]));
+  const recordsByParticipant = groupBy(records, (record) => record.participantId);
+  const feedbackByParticipant = groupBy(feedbackRecords, (feedback) => feedback.participantId);
   const participants = store.participants.map((participant) => ({
     id: participant.id,
     participantCode: participant.publicCode,
@@ -525,7 +548,27 @@ function getAdminRecords() {
     consentAcceptedAt: participant.consentAcceptedAt,
     consentVersion: participant.consentVersion,
     recordCount: records.filter((record) => record.participantId === participant.id).length,
+    feedbackCount: feedbackRecords.filter((feedback) => feedback.participantId === participant.id).length,
   }));
+  const users = store.participants
+    .map((participant) => {
+      const participantRecords = recordsByParticipant.get(participant.id) || [];
+      const participantFeedbackRecords = feedbackByParticipant.get(participant.id) || [];
+      return {
+        id: participant.id,
+        participantCode: participant.publicCode,
+        createdAt: participant.createdAt,
+        updatedAt: participant.updatedAt,
+        consentAcceptedAt: participant.consentAcceptedAt,
+        consentVersion: participant.consentVersion,
+        recordCount: participantRecords.length,
+        feedbackCount: participantFeedbackRecords.length,
+        lastActivityAt: getLatestActivityAt(participant, participantRecords, participantFeedbackRecords),
+        records: participantRecords.map((record) => toClientAdminRecord(record, participantMap)),
+        feedbackRecords: participantFeedbackRecords.map((feedback) => toClientFeedback(feedback, participantMap)),
+      };
+    })
+    .sort(sortUsersByActivityDesc);
 
   return {
     summary: {
@@ -533,32 +576,71 @@ function getAdminRecords() {
       recordCount: records.length,
       reportCount: records.filter((record) => record.report).length,
       feedbackCount: feedbackRecords.length,
-      latestUpdatedAt: records[0]?.updatedAt || "",
+      feedbackUserCount: users.filter((user) => user.feedbackCount > 0).length,
+      latestUpdatedAt: users[0]?.lastActivityAt || records[0]?.updatedAt || "",
     },
     participants,
-    records: records.map((record) => ({
-      ...toClientRecord(record),
-      participantCode: participantMap.get(record.participantId)?.publicCode || "UNKNOWN",
-    })),
-    feedbackRecords: feedbackRecords.map((feedback) => ({
-      id: feedback.id,
-      message: feedback.message,
-      imageDataUrl: feedback.imageDataUrl,
-      imageDataUrls: Array.isArray(feedback.imageDataUrls)
-        ? feedback.imageDataUrls
-        : feedback.imageDataUrl
-          ? [feedback.imageDataUrl]
-          : [],
-      imageMimeType: feedback.imageMimeType,
-      imageMimeTypes: Array.isArray(feedback.imageMimeTypes) ? feedback.imageMimeTypes : [],
-      context: feedback.context,
-      participantCode:
-        feedback.participantCode ||
-        participantMap.get(feedback.participantId)?.publicCode ||
-        "UNKNOWN",
-      createdAt: feedback.createdAt,
-    })),
+    users,
+    records: records.map((record) => toClientAdminRecord(record, participantMap)),
+    feedbackRecords: feedbackRecords.map((feedback) => toClientFeedback(feedback, participantMap)),
   };
+}
+
+function toClientAdminRecord(record, participantMap) {
+  return {
+    ...toClientRecord(record),
+    participantCode: participantMap.get(record.participantId)?.publicCode || "UNKNOWN",
+  };
+}
+
+function toClientFeedback(feedback, participantMap) {
+  return {
+    id: feedback.id,
+    contact: feedback.contact || "",
+    subscriptionFee: feedback.subscriptionFee || "",
+    message: feedback.message,
+    imageDataUrl: feedback.imageDataUrl,
+    imageDataUrls: Array.isArray(feedback.imageDataUrls)
+      ? feedback.imageDataUrls
+      : feedback.imageDataUrl
+        ? [feedback.imageDataUrl]
+        : [],
+    imageMimeType: feedback.imageMimeType,
+    imageMimeTypes: Array.isArray(feedback.imageMimeTypes) ? feedback.imageMimeTypes : [],
+    context: feedback.context,
+    participantCode:
+      feedback.participantCode ||
+      participantMap.get(feedback.participantId)?.publicCode ||
+      "UNKNOWN",
+    createdAt: feedback.createdAt,
+  };
+}
+
+function groupBy(items, getKey) {
+  const grouped = new Map();
+  for (const item of items) {
+    const key = getKey(item) || "";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(item);
+  }
+  return grouped;
+}
+
+function getLatestActivityAt(participant, records, feedbackRecords) {
+  const timestamps = [
+    participant.updatedAt,
+    participant.createdAt,
+    ...records.map((record) => record.updatedAt || record.createdAt),
+    ...feedbackRecords.map((feedback) => feedback.createdAt),
+  ]
+    .map((value) => new Date(value || 0).getTime())
+    .filter((value) => Number.isFinite(value));
+  const latest = Math.max(...timestamps, 0);
+  return latest ? new Date(latest).toISOString() : "";
+}
+
+function sortUsersByActivityDesc(left, right) {
+  return new Date(right.lastActivityAt || 0).getTime() - new Date(left.lastActivityAt || 0).getTime();
 }
 
 function sortByCreatedAtDesc(left, right) {

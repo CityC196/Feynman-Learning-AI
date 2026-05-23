@@ -5,8 +5,7 @@ const elements = {
   loadButton: document.querySelector("#loadAdminButton"),
   status: document.querySelector("#adminStatus"),
   stats: document.querySelector("#adminStats"),
-  feedbackRecords: document.querySelector("#adminFeedbackRecords"),
-  records: document.querySelector("#adminRecords"),
+  users: document.querySelector("#adminUserRecords"),
 };
 
 elements.tokenInput.value = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
@@ -39,13 +38,11 @@ async function loadAdminRecords() {
 
     sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
     renderStats(body.summary || {});
-    renderFeedbackRecords(body.feedbackRecords || []);
-    renderRecords(body.records || []);
+    renderUserRecords(body.users || []);
     showStatus("调研数据已更新。");
   } catch (error) {
     renderStats({});
-    renderFeedbackRecords([]);
-    renderRecords([]);
+    renderUserRecords([]);
     showStatus(error.message || "后台数据加载失败。", true);
   } finally {
     elements.loadButton.disabled = false;
@@ -71,53 +68,157 @@ function renderStats(summary) {
       <strong>${Number(summary.feedbackCount || 0)}</strong>
     </article>
     <article class="admin-stat-card">
+      <span>有反馈用户</span>
+      <strong>${Number(summary.feedbackUserCount || 0)}</strong>
+    </article>
+    <article class="admin-stat-card">
       <span>最近同步</span>
       <strong>${escapeHtml(formatDate(summary.latestUpdatedAt))}</strong>
     </article>
   `;
 }
 
-function renderFeedbackRecords(feedbackRecords) {
-  if (!feedbackRecords.length) {
-    elements.feedbackRecords.innerHTML = `<div class="library-empty-state">暂无用户反馈。</div>`;
+function renderUserRecords(users) {
+  if (!users.length) {
+    elements.users.innerHTML = `<div class="library-empty-state">暂无同步用户。</div>`;
     return;
   }
 
-  elements.feedbackRecords.innerHTML = `
+  elements.users.innerHTML = `
     <div class="section-heading">
-      <p class="eyebrow">用户反馈</p>
-      <h2>问题与建议</h2>
+      <p class="eyebrow">用户视图</p>
+      <h2>按用户汇总</h2>
     </div>
-    ${feedbackRecords
-      .map((feedback) => {
-        const task = feedback.context?.task;
-        const contextText = [
-          feedback.context?.screen ? `页面：${feedback.context.screen}` : "",
-          task?.taskContent ? `主题：${task.taskContent}` : "",
-        ]
-          .filter(Boolean)
-          .join(" · ");
+    ${users.map(renderUserSection).join("")}
+  `;
+}
 
-        return `
-          <article class="admin-record-card feedback-record-card">
-            <div class="library-record-header">
-              <div>
-                <div class="tag-row">
-                  <span class="tag">${escapeHtml(feedback.participantCode || "UNKNOWN")}</span>
-                  <span class="tag neutral">${escapeHtml(formatDate(feedback.createdAt))}</span>
-                </div>
-                <h3>${escapeHtml(contextText || "未记录上下文")}</h3>
-              </div>
-            </div>
-            <div class="feedback-record-body">
-              <p>${escapeHtml(feedback.message || "用户只提交了截图。")}</p>
-              ${renderFeedbackImages(feedback)}
-              ${renderFeedbackDialogue(feedback.context?.messages || [])}
-            </div>
-          </article>
-        `;
-      })
-      .join("")}
+function renderUserSection(user) {
+  const feedbackRecords = Array.isArray(user.feedbackRecords) ? user.feedbackRecords : [];
+  const records = Array.isArray(user.records) ? user.records : [];
+
+  return `
+    <article class="admin-user-section">
+      <div class="admin-user-header">
+        <div>
+          <div class="tag-row">
+            <span class="tag">${escapeHtml(user.participantCode || "UNKNOWN")}</span>
+            <span class="tag neutral">${Number(user.recordCount || records.length)} 条对话</span>
+            <span class="tag neutral">${Number(user.feedbackCount || feedbackRecords.length)} 条反馈</span>
+          </div>
+          <h3>${escapeHtml(user.participantCode || "匿名用户")}</h3>
+          <p>${escapeHtml(formatDate(user.lastActivityAt || user.updatedAt || user.createdAt))} 最近活动</p>
+        </div>
+      </div>
+
+      <div class="admin-user-grid">
+        <section class="admin-user-column">
+          <div class="library-section-heading">
+            <h3>反馈全流程</h3>
+            <span>${feedbackRecords.length} 条</span>
+          </div>
+          ${renderUserFeedback(feedbackRecords)}
+        </section>
+
+        <section class="admin-user-column">
+          <div class="library-section-heading">
+            <h3>对话流程</h3>
+            <span>${records.length} 条</span>
+          </div>
+          ${renderUserConversations(records)}
+        </section>
+      </div>
+    </article>
+  `;
+}
+
+function renderUserFeedback(feedbackRecords) {
+  if (!feedbackRecords.length) {
+    return `<div class="library-empty-state">该用户还没有提交反馈。</div>`;
+  }
+
+  return feedbackRecords.map(renderFeedbackEntry).join("");
+}
+
+function renderFeedbackEntry(feedback) {
+  const task = feedback.context?.task;
+  const contextText = [
+    feedback.context?.screen ? `页面：${feedback.context.screen}` : "",
+    task?.taskContent ? `主题：${task.taskContent}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return `
+    <article class="admin-entry feedback-record-card">
+      <div class="library-record-header">
+        <div>
+          <div class="tag-row">
+            <span class="tag neutral">${escapeHtml(formatDate(feedback.createdAt))}</span>
+            <span class="tag">${escapeHtml(formatSubscriptionFee(feedback.subscriptionFee))}</span>
+          </div>
+          <h4>${escapeHtml(contextText || "未记录上下文")}</h4>
+        </div>
+      </div>
+      <div class="feedback-record-body">
+        <dl class="feedback-meta-list">
+          <div>
+            <dt>联系方式</dt>
+            <dd>${escapeHtml(feedback.contact || "未填写")}</dd>
+          </div>
+          <div>
+            <dt>订阅意愿</dt>
+            <dd>${escapeHtml(formatSubscriptionFee(feedback.subscriptionFee))}</dd>
+          </div>
+        </dl>
+        <p>${escapeHtml(feedback.message || "用户未填写文字反馈。")}</p>
+        ${renderFeedbackImages(feedback)}
+        ${renderFeedbackDialogue(feedback.context?.messages || [])}
+      </div>
+    </article>
+  `;
+}
+
+function renderUserConversations(records) {
+  if (!records.length) {
+    return `<div class="library-empty-state">该用户还没有同步对话。</div>`;
+  }
+
+  return records.map(renderConversationEntry).join("");
+}
+
+function renderConversationEntry(record) {
+  return `
+    <article class="admin-entry">
+      <div class="library-record-header">
+        <div>
+          <div class="tag-row">
+            <span class="tag neutral">${escapeHtml(record.task?.courseName || "未命名学科")}</span>
+            <span class="tag neutral">${escapeHtml(record.task?.taskType || "未命名类型")}</span>
+            <span class="tag">${Number(record.turn || 0)} 轮</span>
+          </div>
+          <h4>${escapeHtml(record.title || "未命名记录")}</h4>
+          <p>${escapeHtml(formatDate(record.updatedAt))} 同步</p>
+        </div>
+      </div>
+      ${renderReportSummary(record.report)}
+      ${renderFeedbackDialogue(record.messages || [], "完整对话流程")}
+    </article>
+  `;
+}
+
+function renderReportSummary(report) {
+  if (!report) {
+    return `<div class="library-empty-state">这条对话还没有生成诊断报告。</div>`;
+  }
+
+  return `
+    <section class="admin-report-summary">
+      <div class="library-section-heading">
+        <h3>诊断摘要</h3>
+      </div>
+      ${renderList(normalizeList(report.mainGaps).slice(0, 3).length ? normalizeList(report.mainGaps).slice(0, 3) : ["暂无主要漏洞。"])}
+    </section>
   `;
 }
 
@@ -146,15 +247,15 @@ function renderFeedbackImages(feedback) {
   `;
 }
 
-function renderFeedbackDialogue(messages) {
+function renderFeedbackDialogue(messages, title = "提交时完整对话") {
   if (!Array.isArray(messages) || !messages.length) {
-    return `<div class="library-empty-state">提交反馈时没有可附带的对话记录。</div>`;
+    return `<div class="library-empty-state">${escapeHtml(title)}为空。</div>`;
   }
 
   return `
     <section class="feedback-dialogue">
       <div class="library-section-heading">
-        <h3>提交时完整对话</h3>
+        <h3>${escapeHtml(title)}</h3>
         <span>${messages.length} 条消息</span>
       </div>
       <div class="feedback-dialogue-list">
@@ -179,67 +280,18 @@ function renderFeedbackDialogue(messages) {
   `;
 }
 
-function renderRecords(records) {
-  if (!records.length) {
-    elements.records.innerHTML = `<div class="library-empty-state">暂无同步记录。</div>`;
-    return;
-  }
-
-  elements.records.innerHTML = records
-    .map((record) => {
-      const report = record.report || {};
-      const gaps = normalizeList(report.mainGaps).slice(0, 3);
-      const actions = normalizeList(report.nextActions).slice(0, 2);
-      const lastUserMessage = [...(record.messages || [])].reverse().find((message) => message.role === "user");
-
-      return `
-        <article class="admin-record-card">
-          <div class="library-record-header">
-            <div>
-              <div class="tag-row">
-                <span class="tag">${escapeHtml(record.participantCode || "UNKNOWN")}</span>
-                <span class="tag neutral">${escapeHtml(record.task?.courseName || "未命名学科")}</span>
-                <span class="tag neutral">${escapeHtml(record.task?.taskType || "未命名类型")}</span>
-              </div>
-              <h3>${escapeHtml(record.title || "未命名记录")}</h3>
-              <p>${escapeHtml(formatDate(record.updatedAt))} 同步 · ${Number(record.turn || 0)} 轮讲解</p>
-            </div>
-          </div>
-
-          <div class="admin-record-grid">
-            <section class="library-section">
-              <div class="library-section-heading">
-                <h3>最近讲解</h3>
-              </div>
-              <p>${escapeHtml(lastUserMessage?.text || "暂无用户讲解。")}</p>
-            </section>
-
-            <section class="library-section">
-              <div class="library-section-heading">
-                <h3>主要漏洞</h3>
-              </div>
-              ${renderList(gaps.length ? gaps : ["暂无诊断报告。"])}
-            </section>
-
-            <section class="library-section">
-              <div class="library-section-heading">
-                <h3>下一步任务</h3>
-              </div>
-              ${renderList(actions.length ? actions : ["暂无下一步任务。"])}
-            </section>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
 function renderList(items) {
   return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
 }
 
 function normalizeList(items) {
   return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
+function formatSubscriptionFee(value) {
+  if (value === 0 || value === "0") return "0 元/月";
+  if (!value) return "未填写";
+  return `${value} 元/月`;
 }
 
 function showStatus(message, isError = false) {

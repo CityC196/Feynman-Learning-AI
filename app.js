@@ -20,6 +20,7 @@ const state = {
   libraryReturnScreen: "setup",
   participant: null,
   syncBusy: false,
+  feedbackReturnScreen: "setup",
 };
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -32,6 +33,7 @@ const elements = {
   lectureScreen: document.querySelector("#lectureScreen"),
   reportScreen: document.querySelector("#reportScreen"),
   libraryScreen: document.querySelector("#libraryScreen"),
+  feedbackScreen: document.querySelector("#feedbackScreen"),
   lectureButton: document.querySelector("#lectureButton"),
   libraryButton: document.querySelector("#libraryButton"),
   sidebarConversationList: document.querySelector("#sidebarConversationList"),
@@ -89,7 +91,9 @@ const elements = {
   consentCheckbox: document.querySelector("#consentCheckbox"),
   confirmConsentButton: document.querySelector("#confirmConsentButton"),
   cancelConsentButton: document.querySelector("#cancelConsentButton"),
-  feedbackModal: document.querySelector("#feedbackModal"),
+  feedbackForm: document.querySelector("#feedbackForm"),
+  feedbackContactInput: document.querySelector("#feedbackContactInput"),
+  feedbackSubscriptionInput: document.querySelector("#feedbackSubscriptionInput"),
   feedbackMessageInput: document.querySelector("#feedbackMessageInput"),
   feedbackImageInput: document.querySelector("#feedbackImageInput"),
   feedbackImagePreviewList: document.querySelector("#feedbackImagePreviewList"),
@@ -98,8 +102,7 @@ const elements = {
   feedbackError: document.querySelector("#feedbackError"),
   submitFeedbackButton: document.querySelector("#submitFeedbackButton"),
   removeFeedbackImageButton: document.querySelector("#removeFeedbackImageButton"),
-  closeFeedbackButton: document.querySelector("#closeFeedbackButton"),
-  cancelFeedbackButton: document.querySelector("#cancelFeedbackButton"),
+  feedbackBackButton: document.querySelector("#feedbackBackButton"),
   librarySearch: document.querySelector("#librarySearch"),
   libraryList: document.querySelector("#libraryList"),
   libraryDetail: document.querySelector("#libraryDetail"),
@@ -116,7 +119,7 @@ elements.replyForm.addEventListener("submit", submitReply);
 elements.reportButton.addEventListener("click", finishSession);
 elements.lectureButton.addEventListener("click", resetSession);
 elements.libraryButton.addEventListener("click", openLibrary);
-elements.feedbackButton.addEventListener("click", openFeedbackModal);
+elements.feedbackButton.addEventListener("click", openFeedbackScreen);
 elements.saveReportButton.addEventListener("click", () => saveCurrentToLibrary({ requireReport: true }));
 elements.continueButton.addEventListener("click", continueLecture);
 elements.taskForm.addEventListener("input", updateSetupPreview);
@@ -139,14 +142,12 @@ elements.stopSyncButton.addEventListener("click", disableResearchSync);
 elements.confirmConsentButton.addEventListener("click", enableResearchSync);
 elements.cancelConsentButton.addEventListener("click", closeConsentModal);
 elements.feedbackImageInput.addEventListener("change", handleFeedbackImageSelection);
-elements.submitFeedbackButton.addEventListener("click", submitFeedback);
+elements.feedbackForm.addEventListener("submit", submitFeedback);
 elements.removeFeedbackImageButton.addEventListener("click", clearFeedbackImage);
-elements.closeFeedbackButton.addEventListener("click", closeFeedbackModal);
-elements.cancelFeedbackButton.addEventListener("click", closeFeedbackModal);
+elements.feedbackBackButton.addEventListener("click", closeFeedbackScreen);
 elements.formulaModal.addEventListener("click", closeModalOnBackdrop);
 elements.imageModal.addEventListener("click", closeModalOnBackdrop);
 elements.consentModal.addEventListener("click", closeModalOnBackdrop);
-elements.feedbackModal.addEventListener("click", closeModalOnBackdrop);
 document.addEventListener("paste", handleImagePaste);
 elements.librarySearch.addEventListener("input", updateLibrarySearch);
 elements.libraryList.addEventListener("click", selectLibraryRecord);
@@ -373,7 +374,7 @@ function handleImagePaste(event) {
   const files = getClipboardImageFiles(event.clipboardData);
   if (!files.length) return;
 
-  if (!elements.feedbackModal.hidden) {
+  if (state.screen === "feedback") {
     event.preventDefault();
     loadFeedbackImageFiles(files, { source: "paste" });
     return;
@@ -615,7 +616,6 @@ function closeModalOnBackdrop(event) {
   if (event.target === elements.formulaModal) closeFormulaModal();
   if (event.target === elements.imageModal) closeImageModal();
   if (event.target === elements.consentModal && hasParticipant()) closeConsentModal();
-  if (event.target === elements.feedbackModal) closeFeedbackModal();
 }
 
 function openConsentModal() {
@@ -635,21 +635,34 @@ function closeConsentModal() {
   elements.consentCheckbox.checked = false;
 }
 
-function openFeedbackModal() {
+function openFeedbackScreen() {
   if (!hasParticipant()) {
     openConsentModal();
     showSaveNotice("请先授权同步并生成访问码，再提交反馈。");
     return;
   }
 
+  if (state.screen !== "feedback") {
+    state.feedbackReturnScreen = state.screen || "setup";
+  }
+
   clearFeedbackMessages();
-  elements.feedbackModal.hidden = false;
-  window.setTimeout(() => elements.feedbackMessageInput.focus(), 0);
+  switchScreen("feedback");
+  saveSession();
+  window.setTimeout(() => elements.feedbackContactInput.focus(), 0);
 }
 
-function closeFeedbackModal() {
-  elements.feedbackModal.hidden = true;
+function closeFeedbackScreen() {
+  const returnScreen = state.feedbackReturnScreen && state.feedbackReturnScreen !== "feedback"
+    ? state.feedbackReturnScreen
+    : "setup";
+
   clearFeedbackMessages();
+  if (returnScreen === "library") {
+    renderLibrary();
+  }
+  switchScreen(returnScreen);
+  saveSession();
 }
 
 function handleFeedbackImageSelection(event) {
@@ -708,17 +721,35 @@ function readFileAsDataUrl(file) {
   });
 }
 
-async function submitFeedback() {
+async function submitFeedback(event) {
+  event.preventDefault();
+
   if (!hasParticipant()) {
     openConsentModal();
     showSaveNotice("请先授权同步并生成访问码，再提交反馈。");
     return;
   }
 
+  const contact = sanitize(elements.feedbackContactInput.value);
+  const subscriptionFee = sanitize(elements.feedbackSubscriptionInput.value);
   const message = sanitize(elements.feedbackMessageInput.value);
-  if (!message && !feedbackImageDataUrls.length) {
+
+  if (!subscriptionFee) {
+    flashMissingInput([elements.feedbackSubscriptionInput]);
+    showFeedbackError("请填写你愿意每月支付的订阅费用。");
+    return;
+  }
+
+  const subscriptionAmount = Number(subscriptionFee);
+  if (!Number.isFinite(subscriptionAmount) || subscriptionAmount < 0) {
+    flashMissingInput([elements.feedbackSubscriptionInput]);
+    showFeedbackError("请填写有效的月订阅费用。");
+    return;
+  }
+
+  if (!message) {
     flashMissingInput([elements.feedbackMessageInput]);
-    showFeedbackError("请写下反馈内容，或粘贴一张问题截图。");
+    showFeedbackError("请写下你的体验感受、需求或建议。");
     return;
   }
 
@@ -728,14 +759,15 @@ async function submitFeedback() {
     await postJson(
       "/api/feedback",
       {
+        contact,
+        subscriptionFee,
         message,
         imageDataUrls: feedbackImageDataUrls,
         context: buildFeedbackContext(),
       },
       { headers: participantHeaders() },
     );
-    elements.feedbackMessageInput.value = "";
-    clearFeedbackImage();
+    clearFeedbackForm();
     showFeedbackStatus("反馈已提交。谢谢你帮我们把产品打磨得更好。");
     showSaveNotice("反馈已同步到后台。");
   } catch (error) {
@@ -747,9 +779,11 @@ async function submitFeedback() {
 
 function buildFeedbackContext() {
   loadLibrary();
-  const activeRecord = state.screen === "library" ? getActiveLibraryRecord() : null;
+  const sourceScreen = state.screen === "feedback" ? state.feedbackReturnScreen : state.screen;
+  const activeRecord = sourceScreen === "library" ? getActiveLibraryRecord() : null;
   return {
-    screen: state.screen,
+    screen: sourceScreen,
+    submittedFrom: state.screen,
     url: window.location.href,
     userAgent: navigator.userAgent,
     task: copyValue(activeRecord?.task || state.task),
@@ -759,6 +793,13 @@ function buildFeedbackContext() {
     turn: Number(activeRecord?.turn || state.turn || 0),
     libraryId: activeRecord?.id || state.libraryId || "",
   };
+}
+
+function clearFeedbackForm() {
+  elements.feedbackContactInput.value = "";
+  elements.feedbackSubscriptionInput.value = "";
+  elements.feedbackMessageInput.value = "";
+  clearFeedbackImage();
 }
 
 function clearFeedbackImage() {
@@ -788,6 +829,8 @@ function renderFeedbackImagePreviews() {
 
 function setFeedbackBusy(isBusy, message = "") {
   elements.submitFeedbackButton.disabled = isBusy;
+  elements.feedbackContactInput.disabled = isBusy;
+  elements.feedbackSubscriptionInput.disabled = isBusy;
   elements.feedbackMessageInput.disabled = isBusy;
   elements.feedbackImageInput.disabled = isBusy;
   elements.removeFeedbackImageButton.disabled = isBusy || !feedbackImageDataUrls.length;
@@ -976,6 +1019,7 @@ function switchScreen(screen) {
   elements.lectureScreen.classList.toggle("active", screen === "lecture");
   elements.reportScreen.classList.toggle("active", screen === "report");
   elements.libraryScreen.classList.toggle("active", screen === "library");
+  elements.feedbackScreen.classList.toggle("active", screen === "feedback");
   if (elements.stageLabel) {
     elements.stageLabel.textContent =
       screen === "setup"
@@ -984,7 +1028,9 @@ function switchScreen(screen) {
           ? "正式讲解"
           : screen === "report"
             ? "诊断报告"
-            : "对话记录";
+            : screen === "library"
+              ? "对话记录"
+              : "反馈";
   }
   updateTurnCount();
   updateSaveButtons();
@@ -1719,6 +1765,7 @@ function resetSession() {
   state.busy = false;
   state.libraryId = "";
   state.libraryReturnScreen = "setup";
+  state.feedbackReturnScreen = "setup";
   elements.courseName.value = "";
   elements.taskContent.value = "";
   setRadioValue("taskType", "知识点讲解");
@@ -1730,6 +1777,7 @@ function resetSession() {
   closeFormulaModal();
   closeImageModal();
   resetImageRecognition();
+  clearFeedbackForm();
   clearError();
   updateSetupPreview();
   updateTurnCount();
@@ -1752,6 +1800,7 @@ function saveSession() {
       libraryFilter: state.libraryFilter,
       libraryQuery: state.libraryQuery,
       libraryReturnScreen: state.libraryReturnScreen,
+      feedbackReturnScreen: state.feedbackReturnScreen,
     }),
   );
 }
@@ -1782,6 +1831,7 @@ function restoreSession() {
     state.libraryFilter = saved.libraryFilter || "all";
     state.libraryQuery = saved.libraryQuery || "";
     state.libraryReturnScreen = saved.libraryReturnScreen || "setup";
+    state.feedbackReturnScreen = saved.feedbackReturnScreen || "setup";
 
     if (state.screen === "library") {
       if (state.task) {
@@ -1795,6 +1845,18 @@ function restoreSession() {
       }
       renderLibrary();
       switchScreen("library");
+    } else if (state.screen === "feedback") {
+      if (state.task) {
+        populateSetupFromState();
+        renderSessionSummary();
+        renderConversation();
+        renderFocusList();
+        if (state.report) renderReport();
+      } else {
+        updateSetupPreview();
+      }
+      clearFeedbackMessages();
+      switchScreen("feedback");
     } else if (state.task) {
       populateSetupFromState();
       renderSessionSummary();

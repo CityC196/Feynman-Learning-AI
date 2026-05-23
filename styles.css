@@ -88,6 +88,10 @@ button {
   gap: 8px;
 }
 
+.sidebar-history {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .sidebar-primary-button,
 .sidebar-action-button,
 .sidebar-text-button,
@@ -402,13 +406,21 @@ h3 {
   align-items: start;
 }
 
+.feedback-layout {
+  display: grid;
+  max-width: 920px;
+  gap: 16px;
+  margin: 22px auto 0;
+}
+
 .report-layout,
 .setup-panel,
 .preview-panel,
 .session-panel,
 .conversation-panel,
 .library-sidebar,
-.library-detail-panel {
+.library-detail-panel,
+.feedback-flow-panel {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
@@ -420,7 +432,8 @@ h3 {
 .session-panel,
 .report-layout,
 .library-sidebar,
-.library-detail-panel {
+.library-detail-panel,
+.feedback-flow-panel {
   padding: 20px;
 }
 
@@ -459,7 +472,8 @@ h3 {
 }
 
 .panel-toolbar,
-.report-topline {
+.report-topline,
+.feedback-topline {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1147,6 +1161,72 @@ button:disabled {
   text-align: center;
 }
 
+.feedback-flow-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.feedback-step {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  border-bottom: 1px solid var(--soft-line);
+  padding-bottom: 18px;
+}
+
+.feedback-step:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.feedback-step-marker {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--mint);
+  color: var(--teal-dark);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.feedback-step-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.feedback-step-body > span,
+.feedback-step-body label > span,
+.recognized-field span {
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.feedback-step-body small,
+.recognized-field small {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.price-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.price-input-row strong {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .admin-shell {
   display: grid;
   gap: 16px;
@@ -1200,6 +1280,100 @@ button:disabled {
 .admin-records {
   display: grid;
   gap: 12px;
+}
+
+.admin-user-section {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--panel);
+}
+
+.admin-user-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--soft-line);
+  padding-bottom: 14px;
+}
+
+.admin-user-header h3 {
+  margin: 8px 0 4px;
+  font-size: 20px;
+}
+
+.admin-user-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-user-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.admin-user-column {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-entry {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--soft-line);
+  padding-top: 12px;
+}
+
+.admin-entry h4 {
+  margin: 8px 0 4px;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.admin-entry .library-record-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.feedback-meta-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.feedback-meta-list div {
+  border: 1px solid var(--soft-line);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--surface);
+}
+
+.feedback-meta-list dt {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.feedback-meta-list dd {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.admin-report-summary {
+  display: grid;
+  gap: 10px;
 }
 
 .admin-record-grid {
@@ -1520,7 +1694,8 @@ math-field:focus-within {
 
   .setup-layout,
   .lecture-layout,
-  .library-layout {
+  .library-layout,
+  .admin-user-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1572,6 +1747,7 @@ math-field:focus-within {
   .topbar,
   .panel-toolbar,
   .report-topline,
+  .feedback-topline,
   .library-detail-toolbar,
   .library-section-heading,
   .privacy-banner {
@@ -1612,7 +1788,13 @@ math-field:focus-within {
   .form-grid,
   .knowledge-map,
   .image-recognition-grid,
-  .feedback-image-grid {
+  .feedback-image-grid,
+  .feedback-meta-list,
+  .price-input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .feedback-step {
     grid-template-columns: 1fr;
   }
 
