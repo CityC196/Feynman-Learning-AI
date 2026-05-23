@@ -8,10 +8,22 @@
   </head>
   <body>
     <div class="app-shell main-app-shell">
-      <aside class="app-sidebar" aria-label="对话导航">
+      <header class="mobile-homebar" aria-label="移动端导航">
+        <button id="mobileMenuButton" class="mobile-icon-button menu-button" type="button" aria-label="打开对话记录" aria-controls="appSidebar" aria-expanded="false">
+          <span></span>
+          <span></span>
+        </button>
+        <div class="mobile-title-pill">AI费曼教室</div>
+        <button id="mobileNewButton" class="mobile-icon-button mobile-new-button" type="button" aria-label="新建 AI 学生">+</button>
+      </header>
+
+      <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="关闭对话记录" hidden></button>
+
+      <aside id="appSidebar" class="app-sidebar" aria-label="对话导航">
         <div class="sidebar-top">
           <div class="brand-block">
             <h1>AI费曼教室</h1>
+            <button id="mobileCloseSidebarButton" class="mobile-sidebar-close" type="button" aria-label="关闭对话记录">×</button>
           </div>
           <button id="lectureButton" class="sidebar-primary-button" type="button">新对话</button>
           <button id="feedbackButton" class="sidebar-action-button" type="button">反馈</button>
@@ -50,7 +62,7 @@
             <form id="taskForm" class="setup-panel">
               <div class="section-heading">
                 <p class="eyebrow">新的讲解</p>
-                <h2 id="setupTitle">先定一个要讲明白的主题</h2>
+                <h2 id="setupTitle">创建 AI 学生</h2>
                 <p class="section-subtitle">选择知识点或题目，然后开始把它讲给 AI 学生听。</p>
               </div>
 
@@ -96,7 +108,7 @@
               </div>
 
               <div class="button-row">
-                <button class="primary-button" type="submit">进入讲解</button>
+                <button class="primary-button" type="submit">创建 AI 学生</button>
               </div>
             </form>
 

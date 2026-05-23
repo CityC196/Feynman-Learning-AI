@@ -34,6 +34,11 @@ const elements = {
   reportScreen: document.querySelector("#reportScreen"),
   libraryScreen: document.querySelector("#libraryScreen"),
   feedbackScreen: document.querySelector("#feedbackScreen"),
+  appSidebar: document.querySelector("#appSidebar"),
+  mobileMenuButton: document.querySelector("#mobileMenuButton"),
+  mobileCloseSidebarButton: document.querySelector("#mobileCloseSidebarButton"),
+  mobileNewButton: document.querySelector("#mobileNewButton"),
+  sidebarBackdrop: document.querySelector("#sidebarBackdrop"),
   lectureButton: document.querySelector("#lectureButton"),
   libraryButton: document.querySelector("#libraryButton"),
   sidebarConversationList: document.querySelector("#sidebarConversationList"),
@@ -118,6 +123,10 @@ elements.taskForm.addEventListener("submit", startSession);
 elements.replyForm.addEventListener("submit", submitReply);
 elements.reportButton.addEventListener("click", finishSession);
 elements.lectureButton.addEventListener("click", resetSession);
+elements.mobileMenuButton.addEventListener("click", openMobileSidebar);
+elements.mobileCloseSidebarButton.addEventListener("click", closeMobileSidebar);
+elements.mobileNewButton.addEventListener("click", resetSession);
+elements.sidebarBackdrop.addEventListener("click", closeMobileSidebar);
 elements.libraryButton.addEventListener("click", openLibrary);
 elements.feedbackButton.addEventListener("click", openFeedbackScreen);
 elements.saveReportButton.addEventListener("click", () => saveCurrentToLibrary({ requireReport: true }));
@@ -149,6 +158,7 @@ elements.formulaModal.addEventListener("click", closeModalOnBackdrop);
 elements.imageModal.addEventListener("click", closeModalOnBackdrop);
 elements.consentModal.addEventListener("click", closeModalOnBackdrop);
 document.addEventListener("paste", handleImagePaste);
+document.addEventListener("keydown", handleGlobalKeydown);
 elements.librarySearch.addEventListener("input", updateLibrarySearch);
 elements.libraryList.addEventListener("click", selectLibraryRecord);
 elements.sidebarConversationList.addEventListener("click", loadSidebarConversation);
@@ -665,6 +675,28 @@ function closeFeedbackScreen() {
   saveSession();
 }
 
+function openMobileSidebar() {
+  loadLibrary();
+  renderSidebarConversations();
+  elements.appSidebar.classList.add("mobile-open");
+  elements.sidebarBackdrop.hidden = false;
+  elements.mobileMenuButton.setAttribute("aria-expanded", "true");
+  document.body.classList.add("mobile-sidebar-open");
+}
+
+function closeMobileSidebar() {
+  elements.appSidebar.classList.remove("mobile-open");
+  elements.sidebarBackdrop.hidden = true;
+  elements.mobileMenuButton.setAttribute("aria-expanded", "false");
+  document.body.classList.remove("mobile-sidebar-open");
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key === "Escape") {
+    closeMobileSidebar();
+  }
+}
+
 function handleFeedbackImageSelection(event) {
   loadFeedbackImageFiles(event.target.files || []);
 }
@@ -1035,6 +1067,7 @@ function switchScreen(screen) {
   updateTurnCount();
   updateSaveButtons();
   renderSidebarConversations();
+  closeMobileSidebar();
 }
 
 function renderSessionSummary() {
@@ -1756,6 +1789,7 @@ function flashMissingInput(items) {
 }
 
 function resetSession() {
+  closeMobileSidebar();
   state.screen = "setup";
   state.task = null;
   state.messages = [];
