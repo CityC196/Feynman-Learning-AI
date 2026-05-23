@@ -110,7 +110,7 @@ button {
   background: rgba(255, 255, 255, 0.94);
   color: #111111;
   font-size: 20px;
-  max-width: calc(100vw - 160px);
+  max-width: calc(100vw - 104px);
   overflow: hidden;
   font-weight: 650;
   text-overflow: ellipsis;
@@ -118,11 +118,6 @@ button {
   box-shadow: 0 10px 30px rgba(32, 33, 36, 0.08);
 }
 
-.mobile-new-button {
-  font-size: 30px;
-  font-weight: 400;
-  line-height: 1;
-}
 .workspace-shell {
   min-width: 0;
   min-height: 100vh;
@@ -1900,7 +1895,7 @@ math-field:focus-within {
     z-index: 700;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 12px;
     pointer-events: none;
   }

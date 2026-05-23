@@ -37,7 +37,6 @@ const elements = {
   appSidebar: document.querySelector("#appSidebar"),
   mobileMenuButton: document.querySelector("#mobileMenuButton"),
   mobileCloseSidebarButton: document.querySelector("#mobileCloseSidebarButton"),
-  mobileNewButton: document.querySelector("#mobileNewButton"),
   sidebarBackdrop: document.querySelector("#sidebarBackdrop"),
   lectureButton: document.querySelector("#lectureButton"),
   libraryButton: document.querySelector("#libraryButton"),
@@ -125,7 +124,6 @@ elements.reportButton.addEventListener("click", finishSession);
 elements.lectureButton.addEventListener("click", resetSession);
 elements.mobileMenuButton.addEventListener("click", openMobileSidebar);
 elements.mobileCloseSidebarButton.addEventListener("click", closeMobileSidebar);
-elements.mobileNewButton.addEventListener("click", resetSession);
 elements.sidebarBackdrop.addEventListener("click", closeMobileSidebar);
 elements.libraryButton.addEventListener("click", openLibrary);
 elements.feedbackButton.addEventListener("click", openFeedbackScreen);
