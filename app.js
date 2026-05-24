@@ -24,7 +24,7 @@ const state = {
 };
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const MAX_PDF_BYTES = 15 * 1024 * 1024;
+const MAX_PDF_BYTES = 30 * 1024 * 1024;
 const MAX_FEEDBACK_IMAGES = 6;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 let selectedImageDataUrl = "";
@@ -2918,8 +2918,21 @@ async function postJson(path, payload, options = {}) {
     body: JSON.stringify(payload),
   });
 
-  const body = await response.json().catch(() => ({}));
+  const rawBody = await response.text().catch(() => "");
+  let body = {};
+  try {
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    body = {};
+  }
+
   if (!response.ok) {
+    if (body.message) {
+      throw new Error(body.message);
+    }
+    if (response.status === 413) {
+      throw new Error("上传文件太大。请压缩 PDF 或拆成几份上传。");
+    }
     throw new Error(body.message || "大模型服务请求失败。");
   }
   return body;
