@@ -24,9 +24,12 @@ const state = {
 };
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
 const MAX_FEEDBACK_IMAGES = 6;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 let selectedImageDataUrl = "";
+let selectedMaterialFile = null;
+let selectedMaterialDataUrl = "";
 
 const elements = {
   setupScreen: document.querySelector("#setupScreen"),
@@ -91,6 +94,7 @@ const elements = {
   insertRecognizedButton: document.querySelector("#insertRecognizedButton"),
   closeImageButton: document.querySelector("#closeImageButton"),
   cancelImageButton: document.querySelector("#cancelImageButton"),
+  pdfFileSummary: document.querySelector("#pdfFileSummary"),
   privacyBanner: document.querySelector("#privacyBanner"),
   researchStatus: document.querySelector("#researchStatus"),
   joinResearchButton: document.querySelector("#joinResearchButton"),
@@ -218,8 +222,12 @@ async function startSession(event) {
     return;
   }
 
+  startSessionFromTask(task);
+}
+
+function startSessionFromTask(task, introText = "") {
   state.task = task;
-  state.messages = [{ role: "assistant", text: buildIntroMessage(task), turn: 0 }];
+  state.messages = [{ role: "assistant", text: introText || buildIntroMessage(task), turn: 0 }];
   state.observations = [];
   state.report = null;
   state.turn = 0;
@@ -231,6 +239,52 @@ async function startSession(event) {
   saveSession();
   saveCurrentToLibrary({ silent: true });
   elements.replyInput.focus();
+}
+
+function startSessionFromMaterial(material) {
+  const task = buildTaskFromMaterial(material);
+  setRadioValue("taskType", "知识点讲解");
+  elements.courseName.value = task.courseName === "未命名学科" ? "" : task.courseName;
+  elements.taskContent.value = task.taskContent;
+  updateSetupPreview();
+  startSessionFromTask(task, material.starterQuestion || buildIntroMessage(task));
+  showSaveNotice("已根据学习材料创建 AI 学生。");
+}
+
+async function addMaterialToCurrentDialogue(material) {
+  if (state.busy) return;
+
+  mergeTaskMaterialContext(material);
+  const explanation = formatMaterialDialogueMessage(material);
+  const visibleMessage = formatMaterialVisibleMessage(material);
+  clearError();
+  appendUserMessage(visibleMessage);
+  setBusy(true, "AI 学生正在阅读材料...");
+
+  try {
+    const result = await postJson("/api/chat", {
+      task: state.task,
+      messages: state.messages,
+      observations: state.observations,
+      latestExplanation: explanation,
+    });
+
+    mergeObservations(result.observations || [], result.resolvedObservationIds || []);
+    state.messages.push({
+      role: "assistant",
+      text: result.assistantText || material.starterQuestion,
+      turn: state.turn,
+    });
+    renderConversation();
+    renderFocusList();
+    saveSession();
+    saveCurrentToLibrary({ silent: true });
+    showSaveNotice("AI 学生已读入补充材料。");
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function submitReply(event) {
@@ -1021,7 +1075,11 @@ function openImageModal(targetInput = elements.replyInput) {
 function closeImageModal() {
   elements.imageModal.hidden = true;
   clearImageMessages();
-  focusActiveInsertTarget();
+  if (state.screen === "lecture") {
+    elements.replyInput.focus();
+  } else {
+    focusActiveInsertTarget();
+  }
 }
 
 function handleImageSelection(event) {
@@ -1034,19 +1092,19 @@ function handleImagePaste(event) {
 
   if (state.screen === "feedback") {
     event.preventDefault();
-    loadFeedbackImageFiles(files, { source: "paste" });
+    loadFeedbackImageFiles(files.filter((file) => file.type.startsWith("image/")), { source: "paste" });
     return;
   }
 
   const pasteTarget = getImagePasteTarget(event.target);
-  if (pasteTarget) {
-    openImageModal(pasteTarget);
-  } else if (elements.imageModal.hidden) {
+  if (!pasteTarget && elements.imageModal.hidden) {
     return;
   }
 
   event.preventDefault();
-  loadImageFile(files[0], { source: pasteTarget ? "direct-paste" : "paste" });
+  const targetInput = pasteTarget || getActiveInsertTarget();
+  activeInsertTarget = targetInput;
+  processMaterialFile(files[0], { source: pasteTarget ? "direct-paste" : "paste", targetInput });
 }
 
 function getImagePasteTarget(target) {
@@ -1057,78 +1115,158 @@ function getImagePasteTarget(target) {
 
 function getClipboardImageFiles(clipboardData) {
   const files = Array.from(clipboardData?.files || []);
-  const imageFiles = files.filter((item) => item.type.startsWith("image/"));
-  if (imageFiles.length) return imageFiles;
+  const materialFiles = files.filter(isSupportedMaterialFile);
+  if (materialFiles.length) return materialFiles;
 
   const items = Array.from(clipboardData?.items || []);
   return items
-    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .filter((item) => item.kind === "file" && (item.type.startsWith("image/") || item.type === "application/pdf"))
     .map((item) => item.getAsFile())
-    .filter(Boolean);
+    .filter(isSupportedMaterialFile);
+}
+
+function isImageFile(file) {
+  return Boolean(file && ALLOWED_IMAGE_TYPES.has(file.type));
+}
+
+function isPdfFile(file) {
+  return Boolean(file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name || "")));
+}
+
+function isSupportedMaterialFile(file) {
+  return isImageFile(file) || isPdfFile(file);
+}
+
+function renderMaterialPreview(file, dataUrl) {
+  elements.imageEmptyState.hidden = true;
+  elements.imagePreview.hidden = true;
+  elements.imagePreview.removeAttribute("src");
+  elements.pdfFileSummary.hidden = true;
+  elements.pdfFileSummary.innerHTML = "";
+
+  if (isImageFile(file)) {
+    elements.imagePreview.src = dataUrl;
+    elements.imagePreview.hidden = false;
+    return;
+  }
+
+  elements.pdfFileSummary.hidden = false;
+  elements.pdfFileSummary.innerHTML = `
+    <strong>${escapeHtml(file.name || "上传的 PDF")}</strong>
+    <span>${escapeHtml(formatFileSize(file.size))}</span>
+  `;
+}
+
+async function processMaterialFile(file, options = {}) {
+  if (state.busy) {
+    showSaveNotice("AI 学生正在思考，等这一轮结束后再添加材料。");
+    return;
+  }
+
+  if (!file || !isSupportedMaterialFile(file)) {
+    showImageError("请上传图片或 PDF 学习材料。");
+    return;
+  }
+
+  const targetInput = options.targetInput || getActiveInsertTarget();
+  const materialType = isPdfFile(file) ? "pdf" : "image";
+  const modalOpen = !elements.imageModal.hidden;
+  if (modalOpen) {
+    clearImageMessages();
+    setImageBusy(true, "正在理解材料并生成 AI 学生...");
+  } else {
+    showSaveNotice("正在理解你粘贴的学习材料...");
+  }
+
+  try {
+    const dataUrl = options.dataUrl || (await readFileAsDataUrl(file));
+    const result = await postJson("/api/prepare-material", {
+      materialType,
+      imageDataUrl: materialType === "image" ? dataUrl : "",
+      pdfDataUrl: materialType === "pdf" ? dataUrl : "",
+      fileName: file.name || (materialType === "pdf" ? "粘贴的 PDF" : "粘贴的图片"),
+      courseHint: sanitize(elements.courseName.value || state.task?.courseName),
+      hint: sanitize(elements.imageHintInput.value),
+      task: state.task || getRecognitionTask(),
+    });
+
+    if (targetInput === elements.replyInput && state.task) {
+      await addMaterialToCurrentDialogue(result);
+    } else {
+      startSessionFromMaterial(result);
+    }
+
+    if (modalOpen) closeImageModal();
+  } catch (error) {
+    if (modalOpen) {
+      showImageError(error.message || "材料理解失败。");
+    } else {
+      showSaveNotice(error.message || "材料理解失败。");
+    }
+  } finally {
+    if (modalOpen) setImageBusy(false);
+  }
 }
 
 function loadImageFile(file, options = {}) {
   clearImageMessages();
   selectedImageDataUrl = "";
+  selectedMaterialFile = null;
+  selectedMaterialDataUrl = "";
   elements.recognizedTextInput.value = "";
   elements.recognizeImageButton.disabled = true;
   elements.imagePreview.hidden = true;
   elements.imagePreview.removeAttribute("src");
+  elements.pdfFileSummary.hidden = true;
+  elements.pdfFileSummary.innerHTML = "";
   elements.imageEmptyState.hidden = false;
 
   if (!file) return;
 
-  if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-    showImageError("请选择 png、jpg、jpeg 或 webp 图片。");
+  if (!isSupportedMaterialFile(file)) {
+    showImageError("请选择图片或 PDF 文件。");
     elements.imageUploadInput.value = "";
     return;
   }
 
-  if (file.size > MAX_IMAGE_BYTES) {
+  if (isImageFile(file) && file.size > MAX_IMAGE_BYTES) {
     showImageError("图片不能超过 5MB。可以先裁剪或压缩后再上传。");
     elements.imageUploadInput.value = "";
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = () => {
-    selectedImageDataUrl = String(reader.result || "");
-    elements.imagePreview.src = selectedImageDataUrl;
-    elements.imagePreview.hidden = false;
-    elements.imageEmptyState.hidden = true;
-    elements.recognizeImageButton.disabled = false;
-    if (options.source === "paste" || options.source === "direct-paste") {
-      showImageStatus("已粘贴图片，可以开始识别。");
-    }
-  };
-  reader.onerror = () => {
-    showImageError("图片读取失败，请换一张图片再试。");
-  };
-  reader.readAsDataURL(file);
-}
-
-async function recognizeSelectedImage() {
-  if (!selectedImageDataUrl) {
-    showImageError("请先选择一张图片。");
+  if (isPdfFile(file) && file.size > MAX_PDF_BYTES) {
+    showImageError("PDF 不能超过 15MB。可以先拆分章节或压缩后再上传。");
+    elements.imageUploadInput.value = "";
     return;
   }
 
-  clearImageMessages();
-  setImageBusy(true, "正在识别图片...");
-
-  try {
-    const result = await postJson("/api/recognize-image", {
-      task: getRecognitionTask(),
-      imageDataUrl: selectedImageDataUrl,
-      hint: sanitize(elements.imageHintInput.value),
+  readFileAsDataUrl(file)
+    .then((dataUrl) => {
+      selectedMaterialFile = file;
+      selectedMaterialDataUrl = dataUrl;
+      selectedImageDataUrl = isImageFile(file) ? dataUrl : "";
+      renderMaterialPreview(file, dataUrl);
+      elements.recognizeImageButton.disabled = false;
+      const pasted = options.source === "paste" || options.source === "direct-paste";
+      showImageStatus(pasted ? "已粘贴材料，可以直接使用。" : "材料已载入，可以直接使用。");
+    })
+    .catch(() => {
+      showImageError("材料读取失败，请换一个文件再试。");
     });
-    elements.recognizedTextInput.value = formatRecognitionResult(result);
-    showImageStatus(`识别完成。请先检查并修改，再插入${getActiveInsertLabel()}。`);
-  } catch (error) {
-    showImageError(`${error.message || "图片识别失败。"} 可以改用文字描述图像或公式。`);
-  } finally {
-    setImageBusy(false);
+}
+
+async function recognizeSelectedImage() {
+  if (!selectedMaterialFile || !selectedMaterialDataUrl) {
+    showImageError("请先选择图片或 PDF。");
+    return;
   }
+
+  await processMaterialFile(selectedMaterialFile, {
+    dataUrl: selectedMaterialDataUrl,
+    source: "modal",
+    targetInput: getActiveInsertTarget(),
+  });
 }
 
 function formatRecognitionResult(result) {
@@ -1214,7 +1352,7 @@ function updateModalCopy() {
   const label = getActiveInsertLabel();
   elements.formulaModalHint.innerHTML = `插入后会以 LaTeX 形式进入${escapeHtml(label)}，例如 <span>\\( f'(x)=0 \\)</span>。`;
   elements.insertFormulaButton.textContent = `插入${label}`;
-  elements.insertRecognizedButton.textContent = `插入${label}`;
+  elements.recognizeImageButton.textContent = label === "讲解" ? "加入当前对话" : "生成 AI 学生";
 }
 
 function getSelectedTaskType() {
@@ -1234,11 +1372,15 @@ function getRecognitionTask() {
 
 function resetImageRecognition(clearFile = true) {
   selectedImageDataUrl = "";
+  selectedMaterialFile = null;
+  selectedMaterialDataUrl = "";
   if (clearFile) elements.imageUploadInput.value = "";
   elements.imageHintInput.value = "";
   elements.recognizedTextInput.value = "";
   elements.imagePreview.hidden = true;
   elements.imagePreview.removeAttribute("src");
+  elements.pdfFileSummary.hidden = true;
+  elements.pdfFileSummary.innerHTML = "";
   elements.imageEmptyState.hidden = false;
   elements.recognizeImageButton.disabled = true;
   setImageBusy(false);
@@ -1246,7 +1388,7 @@ function resetImageRecognition(clearFile = true) {
 }
 
 function setImageBusy(isBusy, message = "") {
-  elements.recognizeImageButton.disabled = isBusy || !selectedImageDataUrl;
+  elements.recognizeImageButton.disabled = isBusy || !selectedMaterialDataUrl;
   elements.insertRecognizedButton.disabled = isBusy;
   elements.imageUploadInput.disabled = isBusy;
   elements.imageHintInput.disabled = isBusy;
@@ -1268,6 +1410,75 @@ function clearImageMessages() {
   elements.imageStatus.textContent = "";
   elements.imageError.hidden = true;
   elements.imageError.textContent = "";
+}
+
+function normalizeClientStringArray(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => sanitize(item)).filter(Boolean);
+}
+
+function buildTaskFromMaterial(material) {
+  const courseName = sanitize(material?.courseName || elements.courseName.value) || "未命名学科";
+  const topic = sanitize(material?.taskContent || material?.starterTopic || material?.overview || material?.documentTitle);
+  return {
+    courseName,
+    taskType: "知识点讲解",
+    taskContent: topic || "上传学习材料中的核心知识点",
+    materialContext: formatMaterialContextForTask(material),
+  };
+}
+
+function mergeTaskMaterialContext(material) {
+  if (!state.task) return;
+  const incoming = formatMaterialContextForTask(material);
+  const existing = sanitize(state.task.materialContext);
+  state.task = {
+    ...state.task,
+    materialContext: [existing, incoming].filter(Boolean).join("\n\n--- 补充材料 ---\n").slice(0, 5000),
+  };
+  renderSessionSummary();
+  renderLectureTopicBanner();
+  saveSession();
+}
+
+function formatMaterialContextForTask(material) {
+  const context = sanitize(material?.materialContext);
+  if (context) return context;
+
+  return [
+    sanitize(material?.documentTitle) ? `材料：${sanitize(material.documentTitle)}` : "",
+    sanitize(material?.overview) ? `概览：${sanitize(material.overview)}` : "",
+    ...normalizeClientStringArray(material?.suggestedSequence).map((item) => `学习顺序：${item}`),
+    ...normalizeClientStringArray(material?.formulas).map((item) => `公式：${item}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatMaterialDialogueMessage(material) {
+  const title = sanitize(material?.documentTitle || material?.fileName || "补充学习材料");
+  const overview = sanitize(material?.overview);
+  const context = formatMaterialContextForTask(material);
+  return [
+    `我补充了一份学习材料：${title}`,
+    overview ? `材料概览：${overview}` : "",
+    context ? `材料上下文：\n${context}` : "",
+    "请你基于这份材料继续用 AI 学生的方式追问我，帮助我把关键知识点讲清楚。",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatMaterialVisibleMessage(material) {
+  const title = sanitize(material?.documentTitle || material?.fileName || "补充学习材料");
+  const overview = sanitize(material?.overview);
+  return [`我补充了一份学习材料：${title}`, overview ? `材料概览：${overview}` : ""].filter(Boolean).join("\n\n");
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes || 0);
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))}KB`;
+  return `${(size / 1024 / 1024).toFixed(1)}MB`;
 }
 
 function closeModalOnBackdrop(event) {
@@ -1675,6 +1886,10 @@ function buildIntroMessage(task) {
 function buildFirstQuestion(task) {
   const topic = taskLabel(task).replace(/[「」]/g, "").trim();
   const quotedTopic = `「${topic}」`;
+
+  if (task.materialContext) {
+    return `我已经看过你上传的学习材料了，但我还没有真正学会${quotedTopic}。\n\n请你先用自己的话讲一下这份材料里最核心的知识点。`;
+  }
 
   if (task.taskType === "题目讲解") {
     return `我有一些基础，但还不会这道题。\n\n请你先用自己的话讲一下这道题主要在问什么。`;

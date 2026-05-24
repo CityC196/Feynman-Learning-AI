@@ -6,9 +6,10 @@
     "check": "node --check app.js && node --check admin.js && node --check server.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.16"
   },
   "dependencies": {
-    "mathlive": "^0.109.2"
+    "mathlive": "^0.109.2",
+    "pdf-parse": "^2.4.5"
   }
 }

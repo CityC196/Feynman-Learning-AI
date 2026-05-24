@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { URL } = require("node:url");
+const { PDFParse } = require("pdf-parse");
 
 loadEnvFile(path.join(__dirname, ".env"));
 
@@ -18,6 +19,10 @@ const ZHIPU_ASR_ENDPOINT =
 const MAX_JSON_BYTES = Number(process.env.MAX_JSON_BYTES || 50_000_000);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_AUDIO_BYTES = Number(process.env.MAX_AUDIO_BYTES || 5 * 1024 * 1024);
+const MAX_PDF_BYTES = Number(process.env.MAX_PDF_BYTES || 15 * 1024 * 1024);
+const PDF_RECOGNITION_TEXT_LIMIT = Number(process.env.PDF_RECOGNITION_TEXT_LIMIT || 28_000);
+const MAX_PDF_VISION_PAGES = Number(process.env.MAX_PDF_VISION_PAGES || 6);
+const PDF_VISION_PAGE_WIDTH = Number(process.env.PDF_VISION_PAGE_WIDTH || 1400);
 const MAX_FEEDBACK_IMAGES = 6;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DATA_FILE = process.env.DATA_FILE || path.join(DATA_DIR, "research-store.json");
@@ -128,6 +133,20 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/recognize-image" && request.method === "POST") {
       const payload = await readJson(request);
       const result = await createImageRecognition(payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/recognize-pdf" && request.method === "POST") {
+      const payload = await readJson(request);
+      const result = await createPdfRecognition(payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/prepare-material" && request.method === "POST") {
+      const payload = await readJson(request);
+      const result = await createMaterialPreparation(payload);
       sendJson(response, 200, result);
       return;
     }
@@ -283,6 +302,325 @@ async function createImageRecognition(payload) {
   };
 }
 
+async function createPdfRecognition(payload) {
+  assertApiKey();
+  const pdfDataUrl = String(payload.pdfDataUrl || "").trim();
+  const fileName = String(payload.fileName || "上传的 PDF").trim().slice(0, 240);
+  const courseHint = String(payload.courseHint || "").trim().slice(0, 160);
+
+  if (!isSupportedPdfDataUrl(pdfDataUrl)) {
+    throw httpError(400, "请上传 PDF 文件。");
+  }
+
+  const base64Pdf = pdfDataUrl.split(",")[1] || "";
+  const approxBytes = Math.ceil(base64Pdf.length * 0.75);
+  if (approxBytes > MAX_PDF_BYTES) {
+    throw httpError(413, `PDF 不能超过 ${Math.round(MAX_PDF_BYTES / 1024 / 1024)}MB。`);
+  }
+
+  const pdfBuffer = Buffer.from(base64Pdf, "base64");
+  let pdfTextResult = { text: "", total: 0 };
+  try {
+    pdfTextResult = await extractPdfText(pdfBuffer);
+  } catch (error) {
+    pdfTextResult = { text: "", total: 0, errorMessage: error.message || "PDF 文本读取失败。" };
+  }
+
+  const extractedText = normalizeExtractedPdfText(pdfTextResult.text);
+  if (extractedText.length < 80) {
+    const material = await createScannedPdfMaterialPreparation({
+      pdfBuffer,
+      fileName,
+      courseHint,
+      userHint: "",
+      currentTask: null,
+      pdfTextResult,
+      extractedText,
+    });
+    return materialToPdfRecognition(material);
+  }
+
+  const recognitionText = buildPdfRecognitionText(extractedText);
+  const response = await callZhipu(
+    [
+      { role: "system", content: buildPdfRecognitionSystemPrompt() },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            fileName,
+            courseHint,
+            pageCount: pdfTextResult.total || 0,
+            extractedCharCount: extractedText.length,
+            textWasTruncated: recognitionText.length < extractedText.length,
+            extractedText: recognitionText,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    { maxTokens: 2200 },
+  );
+
+  const parsed = parseJsonObject(response);
+  const knowledgePoints = normalizeKnowledgePointItems(parsed.knowledgePoints);
+  const suggestedSequence = normalizeStringArray(parsed.suggestedSequence, []);
+  const prerequisites = normalizeStringArray(parsed.prerequisites, []);
+  const formulas = normalizeStringArray(parsed.formulas, []);
+  const cautions = normalizeStringArray(parsed.cautions, []);
+  const taskContent = stringOrDefault(parsed.taskContent, buildPdfTaskContent(parsed, knowledgePoints, suggestedSequence));
+
+  return {
+    courseName: stringOrDefault(parsed.courseName, courseHint || ""),
+    documentTitle: stringOrDefault(parsed.documentTitle, fileName),
+    overview: stringOrDefault(parsed.overview, "已从 PDF 中提取出可用于讲解的知识点。"),
+    starterTopic: stringOrDefault(parsed.starterTopic, knowledgePoints[0]?.title || ""),
+    taskContent,
+    knowledgePoints,
+    suggestedSequence,
+    prerequisites,
+    formulas,
+    cautions,
+    extractedCharCount: extractedText.length,
+    pageCount: Number(pdfTextResult.total || 0),
+  };
+}
+
+async function createMaterialPreparation(payload) {
+  assertApiKey();
+  const materialType = String(payload.materialType || "").trim().toLowerCase();
+  const fileName = String(payload.fileName || "上传材料").trim().slice(0, 240);
+  const courseHint = String(payload.courseHint || "").trim().slice(0, 160);
+  const userHint = String(payload.hint || "").trim().slice(0, 500);
+  const currentTask = payload.task && typeof payload.task === "object" ? normalizeTask(payload.task) : null;
+
+  if (materialType === "image") {
+    return createImageMaterialPreparation({
+      imageDataUrl: payload.imageDataUrl,
+      fileName,
+      courseHint,
+      userHint,
+      currentTask,
+    });
+  }
+
+  if (materialType === "pdf") {
+    return createPdfMaterialPreparation({
+      pdfDataUrl: payload.pdfDataUrl,
+      fileName,
+      courseHint,
+      userHint,
+      currentTask,
+    });
+  }
+
+  throw httpError(400, "请上传图片或 PDF 学习材料。");
+}
+
+async function createImageMaterialPreparation({ imageDataUrl, fileName, courseHint, userHint, currentTask }) {
+  const dataUrl = String(imageDataUrl || "").trim();
+  if (!isSupportedImageDataUrl(dataUrl)) {
+    throw httpError(400, "请上传 png、jpg、jpeg 或 webp 图片。");
+  }
+
+  const approxBytes = Math.ceil((dataUrl.split(",")[1] || "").length * 0.75);
+  if (approxBytes > MAX_IMAGE_BYTES) {
+    throw httpError(413, "图片不能超过 5MB。");
+  }
+
+  const response = await callZhipuVision(
+    [
+      { role: "system", content: buildMaterialImageSystemPrompt() },
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: {
+              url: stripImageDataUrlPrefix(dataUrl),
+            },
+          },
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                materialType: "image",
+                fileName,
+                courseHint,
+                userHint,
+                currentTask,
+                instruction:
+                  "请理解这张图片中的课程材料、公式、草图或题目信息，并整理成 AI 学生创建或追问所需的学习上下文。不要只做 OCR，不要给标准答案。",
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      },
+    ],
+    { maxTokens: 2200 },
+  );
+
+  return normalizeMaterialPreparation(parseJsonObject(response), {
+    materialType: "image",
+    fileName,
+    courseHint,
+    userHint,
+  });
+}
+
+async function createPdfMaterialPreparation({ pdfDataUrl, fileName, courseHint, userHint, currentTask }) {
+  const dataUrl = String(pdfDataUrl || "").trim();
+  if (!isSupportedPdfDataUrl(dataUrl)) {
+    throw httpError(400, "请上传 PDF 文件。");
+  }
+
+  const base64Pdf = dataUrl.split(",")[1] || "";
+  const approxBytes = Math.ceil(base64Pdf.length * 0.75);
+  if (approxBytes > MAX_PDF_BYTES) {
+    throw httpError(413, `PDF 不能超过 ${Math.round(MAX_PDF_BYTES / 1024 / 1024)}MB。`);
+  }
+
+  const pdfBuffer = Buffer.from(base64Pdf, "base64");
+  let pdfTextResult = { text: "", total: 0 };
+  try {
+    pdfTextResult = await extractPdfText(pdfBuffer);
+  } catch (error) {
+    pdfTextResult = { text: "", total: 0, errorMessage: error.message || "PDF 文本读取失败。" };
+  }
+
+  const extractedText = normalizeExtractedPdfText(pdfTextResult.text);
+  if (extractedText.length < 80) {
+    return createScannedPdfMaterialPreparation({
+      pdfBuffer,
+      fileName,
+      courseHint,
+      userHint,
+      currentTask,
+      pdfTextResult,
+      extractedText,
+    });
+  }
+
+  const recognitionText = buildPdfRecognitionText(extractedText);
+  const response = await callZhipu(
+    [
+      { role: "system", content: buildMaterialPdfSystemPrompt() },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            materialType: "pdf",
+            fileName,
+            courseHint,
+            userHint,
+            currentTask,
+            pageCount: pdfTextResult.total || 0,
+            extractedCharCount: extractedText.length,
+            textWasTruncated: recognitionText.length < extractedText.length,
+            extractedText: recognitionText,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    { maxTokens: 2400 },
+  );
+
+  return normalizeMaterialPreparation(parseJsonObject(response), {
+    materialType: "pdf",
+    fileName,
+    courseHint,
+    userHint,
+    pageCount: Number(pdfTextResult.total || 0),
+    extractedCharCount: extractedText.length,
+  });
+}
+
+async function createScannedPdfMaterialPreparation({
+  pdfBuffer,
+  fileName,
+  courseHint,
+  userHint,
+  currentTask,
+  pdfTextResult,
+  extractedText,
+}) {
+  let screenshotResult;
+  try {
+    screenshotResult = await extractPdfPageImages(pdfBuffer, MAX_PDF_VISION_PAGES);
+  } catch (error) {
+    const textError = pdfTextResult?.errorMessage ? `；文字抽取也失败：${pdfTextResult.errorMessage}` : "";
+    throw httpError(422, `这个 PDF 看起来像扫描版，但页面渲染失败${textError}。请换一个未加密的 PDF 再试。`);
+  }
+
+  const pages = screenshotResult.pages.filter((page) => page.dataUrl);
+  if (!pages.length) {
+    throw httpError(422, "这个 PDF 看起来像扫描版，但没有成功渲染出可识别的页面。请换一个未加密的 PDF 再试。");
+  }
+
+  const response = await callZhipuVision(
+    [
+      { role: "system", content: buildMaterialScannedPdfSystemPrompt() },
+      {
+        role: "user",
+        content: [
+          ...pages.map((page) => ({
+            type: "image_url",
+            image_url: {
+              url: stripImageDataUrlPrefix(page.dataUrl),
+            },
+          })),
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                materialType: "scanned_pdf",
+                fileName,
+                courseHint,
+                userHint,
+                currentTask,
+                pageCount: screenshotResult.total || pdfTextResult?.total || pages.length,
+                renderedPages: pages.map((page) => page.pageNumber),
+                renderedPageLimit: MAX_PDF_VISION_PAGES,
+                extractedCharCount: extractedText.length,
+                extractedTextPreview: extractedText.slice(0, 1200),
+                instruction:
+                  "这些图片是同一个扫描版 PDF 的页面截图。请整体理解页面中的课程知识点、公式、图、题目或讲义结构，并生成 AI 学生追问所需的材料上下文。不要要求用户转换成文字版 PDF。",
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      },
+    ],
+    { maxTokens: 2600 },
+  );
+
+  const material = normalizeMaterialPreparation(parseJsonObject(response), {
+    materialType: "pdf",
+    fileName,
+    courseHint,
+    userHint,
+    pageCount: Number(screenshotResult.total || pdfTextResult?.total || pages.length),
+    extractedCharCount: extractedText.length,
+  });
+
+  if (screenshotResult.total > pages.length) {
+    material.cautions = [
+      ...material.cautions,
+      `这份扫描版 PDF 共 ${screenshotResult.total} 页，当前已自动识别前 ${pages.length} 页；如需继续学习后续页面，可以再上传包含对应页的 PDF。`,
+    ];
+    material.materialContext = `${material.materialContext}\n需要确认：这份扫描版 PDF 共 ${screenshotResult.total} 页，当前已自动识别前 ${pages.length} 页。`;
+  }
+
+  return material;
+}
+
 async function createAudioTranscription(payload) {
   assertApiKey();
   const audioDataUrl = String(payload.audioDataUrl || "").trim();
@@ -341,6 +679,41 @@ async function createAudioTranscription(payload) {
 function isSupportedAudioDataUrl(value) {
   return /^data:audio\/wav(?:;[^,]*)?;base64,/i.test(value);
 }
+
+async function extractPdfText(pdfBuffer) {
+  const parser = new PDFParse({ data: new Uint8Array(pdfBuffer) });
+  try {
+    return await parser.getText();
+  } finally {
+    await parser.destroy();
+  }
+}
+
+async function extractPdfPageImages(pdfBuffer, maxPages) {
+  const parser = new PDFParse({ data: new Uint8Array(pdfBuffer) });
+  try {
+    const result = await parser.getScreenshot({
+      first: Math.max(1, maxPages),
+      desiredWidth: PDF_VISION_PAGE_WIDTH,
+      imageDataUrl: true,
+      imageBuffer: false,
+    });
+    return {
+      total: Number(result.total || result.pages?.length || 0),
+      pages: Array.isArray(result.pages)
+        ? result.pages.map((page) => ({
+            pageNumber: Number(page.pageNumber || 0),
+            width: Number(page.width || 0),
+            height: Number(page.height || 0),
+            dataUrl: String(page.dataUrl || ""),
+          }))
+        : [],
+    };
+  } finally {
+    await parser.destroy();
+  }
+}
+
 function buildChatSystemPrompt(task) {
   const modeRule =
     task.taskType === "题目讲解"
@@ -366,6 +739,7 @@ function buildChatSystemPrompt(task) {
     "",
     "# 你会收到的输入",
     "task：课程、模式和当前主题。",
+    "task.materialContext：如果用户上传或粘贴了图片/PDF 学习材料，这里会包含材料中的关键知识点、公式、条件和自测问题。你可以据此追问，但不要直接替用户讲完。",
     "activeObservations：之前仍未解决的观察点，可能带有 id。",
     "recentDialogue：最近几轮用户和 AI 学生的对话。",
     "latestExplanation：用户最新一轮讲解，这是本轮判断的主要依据。",
@@ -382,7 +756,7 @@ function buildChatSystemPrompt(task) {
     "每轮优先追问一个主问题，最多保留 1-3 个 observations。",
     "observations 只放本轮仍需要继续追问的问题；已经解决的问题只放入 resolvedObservationIds。",
     "如果没有发现新的明显漏洞，observations 返回空数组，并在 assistantText 中请用户举例、讲证明思路或解释应用场景。",
-    "如果用户使用了不规范公式、LaTeX 片段、文字草图或图片识别结果，先按其大意理解；再追问变量含义、适用条件、坐标/参考方向、关系式来源或图像含义中缺失的部分。",
+    "如果用户使用了不规范公式、LaTeX 片段、文字草图、图片或 PDF 学习材料，先按其大意理解；再追问变量含义、适用条件、坐标/参考方向、关系式来源或图像含义中缺失的部分。",
     "不要替用户完成整段证明、完整解题过程或标准答案；只有在指出问题时可以用一句话说明为什么当前说法不够。",
     "",
     "# 输出格式",
@@ -437,6 +811,73 @@ function buildImageRecognitionSystemPrompt(task) {
     "如果某个符号、箭头或数字看不清，要在 uncertaintyNotes 中说明，不要猜成确定事实。",
     "必须只输出 JSON 对象，不要 Markdown，不要代码块。",
     'JSON 结构：{"recognizedText":"图片中可读文字或整体转写，没有则空字符串","formulaLatex":"最主要公式的 LaTeX，没有则空字符串","diagramDescription":"图像或草图的客观描述，没有则空字符串","uncertaintyNotes":["看不清或不确定的地方"]}',
+  ].join("\n");
+}
+
+function buildPdfRecognitionSystemPrompt() {
+  return [
+    "你是 AI费曼教室 的课程材料整理助手。",
+    "用户会上传教材节选、课件或论文式 PDF。你的任务不是讲课、不是给答案，而是把材料整理成低年级本科生可以按费曼学习法讲给 AI 学生听的知识点清单。",
+    "",
+    "# 识别原则",
+    "优先提取概念、定理、公式、模型、适用条件、变量含义、推导链条、例子和前置知识。",
+    "语言要适合大一到大二本科生：避免只给术语堆砌，要把每个知识点写成学生能开口讲的主题。",
+    "不要编造 PDF 中没有依据的章节；如果材料不完整，可以在 cautions 中说明。",
+    "不要输出标准答案、证明全文或长篇课程讲义。",
+    "",
+    "# 输出要求",
+    "knowledgePoints 最多 8 个，按从基础到应用排序。",
+    "每个 knowledgePoint 的 explanation 控制在 40 字以内，feynmanQuestion 写成学生自测时可以回答的一句话问题。",
+    "taskContent 要适合直接放入“知识点讲解”输入框：包含文档主题、推荐讲解顺序和关键自测问题，控制在 1200 字以内。",
+    "必须只输出 JSON 对象，不要 Markdown，不要代码块。",
+    'JSON 结构：{"courseName":"推断的学科名称，无法推断则空字符串","documentTitle":"材料标题","overview":"一句话说明这份 PDF 主要讲什么","starterTopic":"建议第一个讲给 AI 学生听的知识点","taskContent":"可直接填入知识点输入框的系统化学习主题","knowledgePoints":[{"title":"知识点名称","explanation":"这个点要理解什么","prerequisite":"需要先会什么，没有则空字符串","formulas":["关键公式或符号，没有则空数组"],"feynmanQuestion":"讲给别人听时必须答出的检查问题"}],"suggestedSequence":["建议学习顺序"],"prerequisites":["共同前置知识"],"formulas":["核心公式"],"cautions":["材料不完整、扫描识别不清或需要人工确认之处"]}',
+  ].join("\n");
+}
+
+function buildMaterialImageSystemPrompt() {
+  return buildMaterialSystemPrompt([
+    "输入是一张图片，可能是手写公式、板书、课件截图、教材截图、题目截图、实验图或结构草图。",
+    "你要理解图片中的知识点、公式、变量、条件、图像关系和可能的学习任务。",
+    "如果图片包含题目，只整理题意、已知条件、变量和建模线索，不要解题。",
+    "如果图片包含手写或截图文字，可以做必要转写，但最终输出重点是 AI 学生需要掌握的学习上下文。",
+  ]);
+}
+
+function buildMaterialPdfSystemPrompt() {
+  return buildMaterialSystemPrompt([
+    "输入是一份 PDF 中抽取出的文字，可能来自教材、课件、讲义或论文式材料。",
+    "你要整理出低年级本科生可以系统学习并讲给 AI 学生听的知识点结构。",
+    "如果材料很长，只抓最核心、最适合作为当前一次讲解主题的部分，不要生成整份课程大纲。",
+  ]);
+}
+
+function buildMaterialScannedPdfSystemPrompt() {
+  return buildMaterialSystemPrompt([
+    "输入是一份扫描版或图片型 PDF 渲染出的若干页图片。",
+    "你要像阅读课件截图或教材扫描页一样理解页面中的标题、公式、图示、题目、变量和条件。",
+    "如果页面里只有部分章节内容，就只围绕可见页面生成学习上下文，不要假装看过未渲染页面。",
+    "不要要求用户转换成文字版 PDF；你已经能直接处理这些页面截图。",
+  ]);
+}
+
+function buildMaterialSystemPrompt(extraRules) {
+  return [
+    "你是 AI费曼教室的学习材料理解助手。",
+    "你的任务不是给用户讲课、不是解题、不是输出标准答案，而是把图片或 PDF 材料转成 AI 学生后续追问所需的上下文。",
+    "",
+    "# 材料处理原则",
+    ...extraRules,
+    "面向大一到大二理工科本科生，优先提取概念、公式、变量含义、适用条件、前置知识、推导线索、直观解释和简单应用边界。",
+    "如果用户已经有 currentTask，要把材料作为该任务的补充上下文；如果没有 currentTask，要生成一个适合创建 AI 学生的知识点讲解主题。",
+    "不要生成需要用户编辑的 OCR 文本；输出应直接用于创建或补充 AI 学生对话。",
+    "不要编造材料中没有依据的知识点；不确定之处放入 cautions。",
+    "",
+    "# 输出要求",
+    "taskContent 要简洁，适合作为当前 AI 学生会话的主题，控制在 600 字以内。",
+    "materialContext 是后续 AI 学生真正需要参考的材料上下文，控制在 1400 字以内，要包含关键知识点、公式、条件、变量和自测问题。",
+    "starterQuestion 写成 AI 学生开场或收到补充材料后最自然追问用户的一句话。",
+    "必须只输出 JSON 对象，不要 Markdown，不要代码块。",
+    'JSON 结构：{"courseName":"推断的学科名称，无法推断则空字符串","documentTitle":"材料标题或主题","overview":"一句话概括材料","starterTopic":"最建议先讲的知识点","taskContent":"适合创建 AI 学生的主题描述","materialContext":"给 AI 学生使用的材料上下文","starterQuestion":"AI 学生接下来应该问用户的问题","knowledgePoints":[{"title":"知识点名称","explanation":"要理解什么","prerequisite":"前置知识，没有则空字符串","formulas":["关键公式或符号"],"feynmanQuestion":"学生讲解时应回答的问题"}],"suggestedSequence":["建议学习顺序"],"prerequisites":["共同前置知识"],"formulas":["核心公式"],"cautions":["需要人工确认之处"]}',
   ].join("\n");
 }
 
@@ -859,7 +1300,7 @@ function copyJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-async function callZhipu(messages) {
+async function callZhipu(messages, options = {}) {
   const response = await fetch(ZHIPU_ENDPOINT, {
     method: "POST",
     headers: {
@@ -872,7 +1313,7 @@ async function callZhipu(messages) {
       thinking: { type: "disabled" },
       temperature: 0.2,
       top_p: 0.9,
-      max_tokens: 1600,
+      max_tokens: Number(options.maxTokens || 1600),
       stream: false,
       response_format: { type: "json_object" },
     }),
@@ -905,7 +1346,7 @@ async function callZhipu(messages) {
   return content;
 }
 
-async function callZhipuVision(messages) {
+async function callZhipuVision(messages, options = {}) {
   const response = await fetch(ZHIPU_ENDPOINT, {
     method: "POST",
     headers: {
@@ -918,7 +1359,7 @@ async function callZhipuVision(messages) {
       thinking: { type: "disabled" },
       temperature: 0.1,
       top_p: 0.8,
-      max_tokens: 1400,
+      max_tokens: Number(options.maxTokens || 1400),
       stream: false,
       response_format: { type: "json_object" },
     }),
@@ -1175,6 +1616,7 @@ function normalizeTask(task) {
     courseName: stringOrDefault(task?.courseName, "未命名学科"),
     taskType: task?.taskType === "题目讲解" ? "题目讲解" : "知识点讲解",
     taskContent: stringOrDefault(task?.taskContent, "当前主题"),
+    materialContext: stringOrDefault(task?.materialContext, "").slice(0, 5000),
   };
 }
 
@@ -1196,6 +1638,10 @@ function isSupportedImageDataUrl(value) {
   return /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/i.test(value);
 }
 
+function isSupportedPdfDataUrl(value) {
+  return /^data:application\/pdf(?:;[^,]*)?;base64,[A-Za-z0-9+/=]+$/i.test(value);
+}
+
 function validateImageDataUrl(value) {
   if (!isSupportedImageDataUrl(value)) {
     throw httpError(400, "请上传 png、jpg、jpeg 或 webp 图片。");
@@ -1213,6 +1659,189 @@ function getImageDataUrlMimeType(value) {
 
 function stripImageDataUrlPrefix(value) {
   return String(value).replace(/^data:image\/(png|jpe?g|webp);base64,/i, "");
+}
+
+function normalizeExtractedPdfText(value) {
+  return String(value || "")
+    .replace(/\u0000/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+}
+
+function buildPdfRecognitionText(text) {
+  if (text.length <= PDF_RECOGNITION_TEXT_LIMIT) return text;
+
+  const introLength = Math.floor(PDF_RECOGNITION_TEXT_LIMIT * 0.62);
+  const tailLength = Math.floor(PDF_RECOGNITION_TEXT_LIMIT * 0.18);
+  const headingLength = PDF_RECOGNITION_TEXT_LIMIT - introLength - tailLength - 800;
+  const headingText = extractLikelyPdfHeadings(text).join("\n").slice(0, Math.max(0, headingLength));
+
+  return [
+    text.slice(0, introLength),
+    "\n\n[PDF 中疑似目录或标题]\n",
+    headingText || "未提取到明显标题。",
+    "\n\n[PDF 末尾节选]\n",
+    text.slice(-tailLength),
+  ]
+    .join("")
+    .slice(0, PDF_RECOGNITION_TEXT_LIMIT);
+}
+
+function extractLikelyPdfHeadings(text) {
+  const seen = new Set();
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => {
+      if (line.length < 4 || line.length > 90) return false;
+      if (/^\d+$/.test(line)) return false;
+      if (/^[-–—]*\s*\d+\s+of\s+\d+\s*[-–—]*$/i.test(line)) return false;
+      return (
+        /^(\d+(\.\d+){0,3}|第[一二三四五六七八九十百]+[章节讲])\s+/.test(line) ||
+        /^(chapter|section|lecture|unit|part)\s+\d+/i.test(line) ||
+        /(定理|定义|公式|原理|模型|方法|推导|应用|例题|实验|总结)$/.test(line)
+      );
+    })
+    .filter((line) => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 90);
+}
+
+function normalizeKnowledgePointItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      if (typeof item === "string") {
+        return {
+          title: item.trim(),
+          explanation: "",
+          prerequisite: "",
+          formulas: [],
+          feynmanQuestion: "",
+        };
+      }
+
+      return {
+        title: stringOrDefault(item?.title, ""),
+        explanation: stringOrDefault(item?.explanation, ""),
+        prerequisite: stringOrDefault(item?.prerequisite, ""),
+        formulas: normalizeStringArray(item?.formulas, []),
+        feynmanQuestion: stringOrDefault(item?.feynmanQuestion, ""),
+      };
+    })
+    .filter((item) => item.title)
+    .slice(0, 8);
+}
+
+function normalizeMaterialPreparation(parsed, fallback = {}) {
+  const knowledgePoints = normalizeKnowledgePointItems(parsed?.knowledgePoints);
+  const suggestedSequence = normalizeStringArray(parsed?.suggestedSequence, []);
+  const prerequisites = normalizeStringArray(parsed?.prerequisites, []);
+  const formulas = normalizeStringArray(parsed?.formulas, []);
+  const cautions = normalizeStringArray(parsed?.cautions, []);
+  const documentTitle = stringOrDefault(parsed?.documentTitle, fallback.fileName || "上传材料");
+  const overview = stringOrDefault(parsed?.overview, "已理解上传材料中的学习内容。");
+  const starterTopic = stringOrDefault(parsed?.starterTopic, knowledgePoints[0]?.title || documentTitle);
+  const materialContext = stringOrDefault(
+    parsed?.materialContext,
+    buildMaterialContext({ documentTitle, overview, knowledgePoints, suggestedSequence, prerequisites, formulas, cautions }),
+  );
+  const taskContent = stringOrDefault(
+    parsed?.taskContent,
+    buildPdfTaskContent({ documentTitle, overview }, knowledgePoints, suggestedSequence),
+  );
+
+  return {
+    materialType: fallback.materialType || "material",
+    courseName: stringOrDefault(parsed?.courseName, fallback.courseHint || ""),
+    documentTitle,
+    overview,
+    starterTopic,
+    taskContent,
+    materialContext,
+    starterQuestion: stringOrDefault(
+      parsed?.starterQuestion,
+      `我已经看过这份材料了。你能先用自己的话讲讲「${starterTopic}」主要在说什么吗？`,
+    ),
+    knowledgePoints,
+    suggestedSequence,
+    prerequisites,
+    formulas,
+    cautions,
+    fileName: fallback.fileName || "",
+    pageCount: Number(fallback.pageCount || 0),
+    extractedCharCount: Number(fallback.extractedCharCount || 0),
+  };
+}
+
+function materialToPdfRecognition(material) {
+  return {
+    courseName: material.courseName || "",
+    documentTitle: material.documentTitle || material.fileName || "扫描版 PDF",
+    overview: material.overview || "已从扫描版 PDF 页面中识别出可用于讲解的知识点。",
+    starterTopic: material.starterTopic || material.knowledgePoints?.[0]?.title || "",
+    taskContent: material.taskContent || material.materialContext || "",
+    knowledgePoints: material.knowledgePoints || [],
+    suggestedSequence: material.suggestedSequence || [],
+    prerequisites: material.prerequisites || [],
+    formulas: material.formulas || [],
+    cautions: material.cautions || [],
+    extractedCharCount: material.extractedCharCount || 0,
+    pageCount: material.pageCount || 0,
+  };
+}
+
+function buildMaterialContext({ documentTitle, overview, knowledgePoints, suggestedSequence, prerequisites, formulas, cautions }) {
+  const lines = [`材料：${documentTitle}`, `概览：${overview}`];
+
+  if (knowledgePoints.length) {
+    lines.push(
+      "关键知识点：",
+      ...knowledgePoints.map((item, index) => {
+        const parts = [`${index + 1}. ${item.title}`];
+        if (item.explanation) parts.push(item.explanation);
+        if (item.prerequisite) parts.push(`前置：${item.prerequisite}`);
+        if (item.formulas?.length) parts.push(`公式：${item.formulas.join("；")}`);
+        if (item.feynmanQuestion) parts.push(`自测：${item.feynmanQuestion}`);
+        return parts.join("；");
+      }),
+    );
+  }
+
+  if (suggestedSequence.length) lines.push(`学习顺序：${suggestedSequence.join(" -> ")}`);
+  if (prerequisites.length) lines.push(`共同前置知识：${prerequisites.join("；")}`);
+  if (formulas.length) lines.push(`核心公式：${formulas.join("；")}`);
+  if (cautions.length) lines.push(`需要确认：${cautions.join("；")}`);
+
+  return lines.join("\n").slice(0, 1400);
+}
+
+function buildPdfTaskContent(parsed, knowledgePoints, suggestedSequence) {
+  const lines = [
+    `PDF主题：${stringOrDefault(parsed?.documentTitle, "上传的课程材料")}`,
+    stringOrDefault(parsed?.overview, ""),
+  ].filter(Boolean);
+
+  if (knowledgePoints.length) {
+    lines.push(
+      "建议按这个顺序讲清楚：",
+      ...knowledgePoints.map((item, index) => `${index + 1}. ${item.title}${item.explanation ? `：${item.explanation}` : ""}`),
+    );
+  } else if (suggestedSequence.length) {
+    lines.push("建议按这个顺序讲清楚：", ...suggestedSequence.map((item, index) => `${index + 1}. ${item}`));
+  }
+
+  const questions = knowledgePoints.map((item) => item.feynmanQuestion).filter(Boolean).slice(0, 4);
+  if (questions.length) {
+    lines.push("自测问题：", ...questions.map((item) => `- ${item}`));
+  }
+
+  return lines.join("\n").slice(0, 1200);
 }
 
 function normalizeStringArray(items, fallback) {

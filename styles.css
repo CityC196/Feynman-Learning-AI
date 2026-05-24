@@ -1661,6 +1661,7 @@ math-field:focus-within {
 }
 
 .image-recognition-grid,
+.pdf-recognition-grid,
 .feedback-image-grid {
   display: grid;
   grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
@@ -1690,7 +1691,8 @@ math-field:focus-within {
 }
 
 .upload-box.compact,
-.image-preview-box.compact {
+.image-preview-box.compact,
+.pdf-preview-box.compact {
   min-height: 130px;
 }
 
@@ -1703,7 +1705,8 @@ math-field:focus-within {
   font-size: 13px;
 }
 
-.image-preview-box {
+.image-preview-box,
+.pdf-preview-box {
   display: grid;
   min-height: 170px;
   place-items: center;
@@ -1718,6 +1721,27 @@ math-field:focus-within {
   max-height: 240px;
   border-radius: 6px;
   object-fit: contain;
+}
+
+.pdf-file-summary {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--panel);
+}
+
+.pdf-file-summary strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.pdf-file-summary span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .knowledge-map {
@@ -1865,6 +1889,7 @@ math-field:focus-within {
   .form-grid,
   .knowledge-map,
   .image-recognition-grid,
+  .pdf-recognition-grid,
   .feedback-image-grid,
   .feedback-meta-list,
   .price-input-row {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI费曼教室</title>
-    <link rel="stylesheet" href="./styles.css?v=20260523-voice-overlap-1s" />
+    <link rel="stylesheet" href="./styles.css?v=20260524-pdf-recognition" />
   </head>
   <body>
     <div class="app-shell main-app-shell">
@@ -95,7 +95,7 @@
                     <div class="input-tools" aria-label="主题输入辅助工具">
                       <button id="taskVoiceToolButton" class="tool-button voice-tool-button" type="button" aria-pressed="false">语音</button>
                       <button id="taskFormulaToolButton" class="tool-button" type="button">公式</button>
-                      <button id="taskImageToolButton" class="tool-button" type="button">识别图片</button>
+                      <button id="taskImageToolButton" class="tool-button" type="button">添加材料</button>
                     </div>
                   </div>
                   <textarea
@@ -170,7 +170,7 @@
                   <div class="input-tools" aria-label="讲解输入辅助工具">
                     <button id="voiceToolButton" class="tool-button voice-tool-button" type="button" aria-pressed="false">语音</button>
                     <button id="formulaToolButton" class="tool-button" type="button">公式</button>
-                    <button id="imageToolButton" class="tool-button" type="button">识别图片</button>
+                    <button id="imageToolButton" class="tool-button" type="button">添加材料</button>
                   </div>
                 </div>
                 <textarea id="replyInput" rows="5" placeholder="输入讲解内容"></textarea>
@@ -368,45 +368,43 @@
       <section class="modal-card image-card">
         <div class="modal-header">
           <div>
-            <p class="eyebrow">图片识别</p>
-            <h2 id="imageModalTitle">识别手写公式或草图</h2>
+            <p class="eyebrow">学习材料</p>
+            <h2 id="imageModalTitle">添加图片或 PDF</h2>
           </div>
-          <button id="closeImageButton" class="ghost-button" type="button" aria-label="关闭图片识别">关闭</button>
+          <button id="closeImageButton" class="ghost-button" type="button" aria-label="关闭材料添加">关闭</button>
         </div>
 
         <div class="image-recognition-grid">
           <label class="upload-box">
-            <span>选择图片或直接粘贴</span>
-            <input id="imageUploadInput" type="file" accept="image/png,image/jpeg,image/webp" />
+            <span>选择图片或 PDF</span>
+            <input id="imageUploadInput" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" />
           </label>
           <div class="image-preview-box">
-            <img id="imagePreview" alt="待识别图片预览" hidden />
-            <p id="imageEmptyState" class="muted">支持 png、jpg、jpeg、webp，单张不超过 5MB。打开弹窗后可直接粘贴截图。</p>
+            <img id="imagePreview" alt="学习材料图片预览" hidden />
+            <div id="pdfFileSummary" class="pdf-file-summary" hidden></div>
+            <p id="imageEmptyState" class="muted">支持图片、文字型 PDF 和扫描版/图片型 PDF。也可以直接在输入框里粘贴图片或 PDF。</p>
           </div>
         </div>
 
         <label class="hint-field">
-          <span>补充说明（可选）</span>
-          <input id="imageHintInput" type="text" placeholder="如：这是受力图 / 这是证明中的公式" autocomplete="off" />
+          <span>课程或材料说明（可选）</span>
+          <input id="imageHintInput" type="text" placeholder="如：大学物理电磁学 / 这是高数极限章节" autocomplete="off" />
         </label>
 
         <div id="imageStatus" class="loading-state" hidden></div>
         <div id="imageError" class="error-state" hidden></div>
 
-        <label class="recognized-field">
-          <span>识别结果（可编辑）</span>
-          <textarea id="recognizedTextInput" rows="7" placeholder="识别后会显示可编辑文本"></textarea>
-        </label>
+        <textarea id="recognizedTextInput" hidden></textarea>
 
         <div class="button-row">
-          <button id="recognizeImageButton" class="secondary-button" type="button" disabled>开始识别</button>
-          <button id="insertRecognizedButton" class="primary-button" type="button">插入讲解</button>
+          <button id="recognizeImageButton" class="primary-button" type="button" disabled>使用材料</button>
+          <button id="insertRecognizedButton" class="secondary-button" type="button" hidden>插入讲解</button>
           <button id="cancelImageButton" class="ghost-button" type="button">取消</button>
         </div>
       </section>
     </div>
 
     <script src="./node_modules/mathlive/mathlive.min.js"></script>
-    <script src="./app.js?v=20260523-voice-overlap-1s"></script>
+    <script src="./app.js?v=20260524-material-input"></script>
   </body>
 </html>
