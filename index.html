@@ -109,7 +109,7 @@
               </div>
 
               <div class="button-row">
-                <button class="primary-button" type="submit">创建 AI 学生</button>
+                <button id="createStudentButton" class="primary-button" type="submit">创建 AI 学生</button>
               </div>
             </form>
 
@@ -143,6 +143,14 @@
                 <h2>当前主题</h2>
               </div>
               <div id="sessionSummary" class="summary-list"></div>
+
+              <div class="section-heading compact">
+                <p class="eyebrow">学习流程图</p>
+                <h2>拆解路径</h2>
+              </div>
+              <div id="learningRoadmap" class="roadmap-flow">
+                <p class="muted">创建后会显示 AI 大概要追问的几个小问题。</p>
+              </div>
 
               <div class="section-heading compact">
                 <p class="eyebrow">AI 学生没听懂的地方</p>
@@ -179,6 +187,8 @@
                 <div id="errorState" class="error-state" hidden></div>
                 <div class="button-row">
                   <button id="submitReplyButton" class="primary-button" type="submit">提交讲解</button>
+                  <button id="hintButton" class="secondary-button" type="button">提示</button>
+                  <button id="skipButton" class="secondary-button" type="button">跳过</button>
                   <button id="reportButton" class="secondary-button" type="button">结束并生成报告</button>
                 </div>
               </form>

@@ -49,6 +49,7 @@ const elements = {
   stageLabel: document.querySelector("#stageLabel"),
   turnCount: document.querySelector("#turnCount"),
   taskForm: document.querySelector("#taskForm"),
+  createStudentButton: document.querySelector("#createStudentButton"),
   courseName: document.querySelector("#courseName"),
   taskContent: document.querySelector("#taskContent"),
   taskContentLabel: document.querySelector("#taskContentLabel"),
@@ -59,6 +60,7 @@ const elements = {
   conceptModeCard: document.querySelector("#conceptModeCard"),
   problemModeCard: document.querySelector("#problemModeCard"),
   sessionSummary: document.querySelector("#sessionSummary"),
+  learningRoadmap: document.querySelector("#learningRoadmap"),
   lectureTopicBanner: document.querySelector("#lectureTopicBanner"),
   conversation: document.querySelector("#conversation"),
   replyForm: document.querySelector("#replyForm"),
@@ -68,6 +70,8 @@ const elements = {
   imageToolButton: document.querySelector("#imageToolButton"),
   voiceStatus: document.querySelector("#voiceStatus"),
   submitReplyButton: document.querySelector("#submitReplyButton"),
+  hintButton: document.querySelector("#hintButton"),
+  skipButton: document.querySelector("#skipButton"),
   reportButton: document.querySelector("#reportButton"),
   saveReportButton: document.querySelector("#saveReportButton"),
   continueButton: document.querySelector("#continueButton"),
@@ -173,6 +177,8 @@ elements.taskImageToolButton.addEventListener("click", () => openImageModal(elem
 elements.voiceToolButton.addEventListener("click", () => toggleVoiceInput(elements.replyInput));
 elements.formulaToolButton.addEventListener("click", () => openFormulaModal(elements.replyInput));
 elements.imageToolButton.addEventListener("click", () => openImageModal(elements.replyInput));
+elements.hintButton.addEventListener("click", requestHint);
+elements.skipButton.addEventListener("click", skipCurrentQuestion);
 elements.insertFormulaButton.addEventListener("click", insertFormula);
 elements.clearFormulaButton.addEventListener("click", clearFormula);
 elements.closeFormulaButton.addEventListener("click", closeFormulaModal);
@@ -222,12 +228,45 @@ async function startSession(event) {
     return;
   }
 
-  startSessionFromTask(task);
+  clearError();
+  setSetupBusy(true, "AI 学生正在拆解学习流程...");
+  try {
+    const preparedTask = await enrichTaskWithRoadmap(task);
+    startSessionFromTask(preparedTask);
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setSetupBusy(false);
+  }
+}
+
+async function enrichTaskWithRoadmap(task) {
+  const fallbackRoadmap = buildFallbackRoadmap(task);
+
+  try {
+    const result = await postJson("/api/roadmap", { task });
+    const roadmap = normalizeClientRoadmap(result.roadmap);
+    return {
+      ...task,
+      roadmapOverview: sanitize(result.overview),
+      learningRoadmap: roadmap.length ? roadmap : fallbackRoadmap,
+    };
+  } catch {
+    return {
+      ...task,
+      roadmapOverview: "",
+      learningRoadmap: fallbackRoadmap,
+    };
+  }
 }
 
 function startSessionFromTask(task, introText = "") {
-  state.task = task;
-  state.messages = [{ role: "assistant", text: introText || buildIntroMessage(task), turn: 0 }];
+  const learningRoadmap = normalizeClientRoadmap(task.learningRoadmap);
+  state.task = {
+    ...task,
+    learningRoadmap: learningRoadmap.length ? learningRoadmap : buildFallbackRoadmap(task),
+  };
+  state.messages = [{ role: "assistant", text: introText || buildIntroMessage(state.task), turn: 0 }];
   state.observations = [];
   state.report = null;
   state.turn = 0;
@@ -247,7 +286,7 @@ function startSessionFromMaterial(material) {
   elements.courseName.value = task.courseName === "未命名学科" ? "" : task.courseName;
   elements.taskContent.value = task.taskContent;
   updateSetupPreview();
-  startSessionFromTask(task, material.starterQuestion || buildIntroMessage(task));
+  startSessionFromTask(task, task.learningRoadmap?.length ? buildIntroMessage(task) : material.starterQuestion || buildIntroMessage(task));
   showSaveNotice("已根据学习材料创建 AI 学生。");
 }
 
@@ -269,7 +308,7 @@ async function addMaterialToCurrentDialogue(material) {
       latestExplanation: explanation,
     });
 
-    mergeObservations(result.observations || [], result.resolvedObservationIds || []);
+    mergeObservations(filterControlActionObservations(result.observations || [], type), result.resolvedObservationIds || []);
     state.messages.push({
       role: "assistant",
       text: result.assistantText || material.starterQuestion,
@@ -309,6 +348,60 @@ async function submitReply(event) {
       messages: state.messages,
       observations: state.observations,
       latestExplanation: explanation,
+    });
+
+    mergeObservations(result.observations || [], result.resolvedObservationIds || []);
+    state.messages.push({
+      role: "assistant",
+      text: result.assistantText,
+      turn: state.turn,
+    });
+    renderConversation();
+    renderFocusList();
+    saveSession();
+    saveCurrentToLibrary({ silent: true });
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function requestHint() {
+  await sendControlAction({
+    type: "hint",
+    visibleText: "我这里也卡住了，请先给我一个提示。",
+    busyMessage: "AI 学生正在整理提示...",
+  });
+}
+
+async function skipCurrentQuestion() {
+  await sendControlAction({
+    type: "skip",
+    visibleText: "这个问题我已经掌握了，先跳过。",
+    busyMessage: "AI 学生正在切到下一个问题...",
+  });
+}
+
+async function sendControlAction({ type, visibleText, busyMessage }) {
+  if (state.busy || !state.task) return;
+  if (voiceState.isListening) await stopVoiceInput({ focusTarget: false });
+
+  clearError();
+  appendUserMessage(visibleText);
+  const resolvedObservationIds = type === "skip" ? resolveActiveObservations() : [];
+  setBusy(true, busyMessage);
+
+  try {
+    const result = await postJson("/api/chat", {
+      task: state.task,
+      messages: state.messages,
+      observations: state.observations,
+      latestExplanation: visibleText,
+      controlAction: {
+        type,
+        resolvedObservationIds,
+      },
     });
 
     mergeObservations(result.observations || [], result.resolvedObservationIds || []);
@@ -394,6 +487,27 @@ function mergeObservations(newItems, resolvedIds) {
   }));
 
   state.observations.push(...incoming.filter((item) => item.description || item.question));
+}
+
+function filterControlActionObservations(items, actionType) {
+  if (actionType !== "skip") return items;
+  return items.filter((item) => {
+    const text = `${item?.description || ""}\n${item?.question || ""}`;
+    return !/跳过|尚未|未给出|没有说明|没有讲|缺少讲解/.test(text);
+  });
+}
+
+function resolveActiveObservations() {
+  const activeIds = state.observations.filter((item) => item.status !== "resolved").map((item) => item.id);
+  if (!activeIds.length) return [];
+
+  const activeSet = new Set(activeIds);
+  state.observations = state.observations.map((item) =>
+    activeSet.has(item.id) ? { ...item, status: "resolved", resolvedTurn: state.turn, resolvedBy: "skip" } : item,
+  );
+  renderFocusList();
+  saveSession();
+  return activeIds;
 }
 
 function initializeVoiceInput() {
@@ -1417,14 +1531,125 @@ function normalizeClientStringArray(items) {
   return items.map((item) => sanitize(item)).filter(Boolean);
 }
 
+function normalizeClientRoadmap(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      if (typeof item === "string") {
+        return {
+          title: item.trim(),
+          question: item.trim(),
+          focus: "",
+        };
+      }
+
+      return {
+        title: sanitize(item?.title || item?.name),
+        question: sanitize(item?.question || item?.feynmanQuestion || item?.description),
+        focus: sanitize(item?.focus || item?.explanation),
+      };
+    })
+    .filter((item) => item.title || item.question)
+    .map((item, index) => ({
+      title: item.title || `第 ${index + 1} 步`,
+      question: item.question || item.title,
+      focus: item.focus,
+    }))
+    .slice(0, 7);
+}
+
+function buildFallbackRoadmap(task) {
+  const topic = taskLabel(task).replace(/[「」]/g, "").trim() || "这个主题";
+
+  if (task?.taskType === "题目讲解") {
+    return [
+      {
+        title: "题意拆解",
+        question: "这道题要求什么，已知条件和未知量分别是什么？",
+        focus: "先把问题对象讲清楚。",
+      },
+      {
+        title: "建模依据",
+        question: "你准备选哪些变量、坐标或方程，为什么可以这样建模？",
+        focus: "检查建模不是直接套公式。",
+      },
+      {
+        title: "公式条件",
+        question: "用到的公式或定理需要哪些适用条件？题目里满足了吗？",
+        focus: "防止公式依据缺失。",
+      },
+      {
+        title: "步骤衔接",
+        question: "从上一步到下一步，中间省略了哪条推理？",
+        focus: "把计算链条补完整。",
+      },
+      {
+        title: "结果解释",
+        question: "最后结果的单位、方向、范围或物理意义合理吗？",
+        focus: "回到题目检查答案。",
+      },
+    ];
+  }
+
+  return [
+    {
+      title: "问题定位",
+      question: `${topic}主要想解决什么问题，或者描述什么关系？`,
+      focus: "先说它为什么会被提出。",
+    },
+    {
+      title: "核心表述",
+      question: `${topic}的定义、基本公式或定理表述是什么？`,
+      focus: "用一句准确的话立住概念。",
+    },
+    {
+      title: "符号条件",
+      question: "公式里的量分别代表什么，它在什么条件下才能用？",
+      focus: "拆清变量、对象和适用范围。",
+    },
+    {
+      title: "直观理解",
+      question: "如果暂时不用公式，你会怎样直观解释它为什么合理？",
+      focus: "检验是否只是背了形式。",
+    },
+    {
+      title: "简单应用",
+      question: `遇到一个具体例子时，你会怎样判断能不能用${topic}，第一步做什么？`,
+      focus: "把概念落到操作步骤。",
+    },
+  ];
+}
+
+function buildRoadmapFromMaterial(material) {
+  const knowledgeRoadmap = normalizeClientRoadmap(
+    normalizeClientStringArray(material?.suggestedSequence).map((item) => ({
+      title: item,
+      question: `你能先讲清楚「${item}」在这份材料里起什么作用吗？`,
+    })),
+  );
+  const pointRoadmap = normalizeClientRoadmap(
+    Array.isArray(material?.knowledgePoints)
+      ? material.knowledgePoints.map((item) => ({
+          title: item.title,
+          question: item.feynmanQuestion || `你能用自己的话讲讲「${item.title}」吗？`,
+          focus: item.explanation,
+        }))
+      : [],
+  );
+  return knowledgeRoadmap.length ? knowledgeRoadmap : pointRoadmap;
+}
+
 function buildTaskFromMaterial(material) {
   const courseName = sanitize(material?.courseName || elements.courseName.value) || "未命名学科";
   const topic = sanitize(material?.taskContent || material?.starterTopic || material?.overview || material?.documentTitle);
+  const learningRoadmap = buildRoadmapFromMaterial(material);
   return {
     courseName,
     taskType: "知识点讲解",
     taskContent: topic || "上传学习材料中的核心知识点",
     materialContext: formatMaterialContextForTask(material),
+    roadmapOverview: sanitize(material?.overview),
+    learningRoadmap: learningRoadmap.length ? learningRoadmap : buildFallbackRoadmap({ taskType: "知识点讲解", taskContent: topic }),
   };
 }
 
@@ -1432,9 +1657,12 @@ function mergeTaskMaterialContext(material) {
   if (!state.task) return;
   const incoming = formatMaterialContextForTask(material);
   const existing = sanitize(state.task.materialContext);
+  const existingRoadmap = normalizeClientRoadmap(state.task.learningRoadmap);
+  const incomingRoadmap = buildRoadmapFromMaterial(material);
   state.task = {
     ...state.task,
     materialContext: [existing, incoming].filter(Boolean).join("\n\n--- 补充材料 ---\n").slice(0, 5000),
+    learningRoadmap: existingRoadmap.length ? existingRoadmap : incomingRoadmap,
   };
   renderSessionSummary();
   renderLectureTopicBanner();
@@ -1886,6 +2114,21 @@ function buildIntroMessage(task) {
 function buildFirstQuestion(task) {
   const topic = taskLabel(task).replace(/[「」]/g, "").trim();
   const quotedTopic = `「${topic}」`;
+  const firstStep = normalizeClientRoadmap(task.learningRoadmap)[0];
+  const firstQuestion = firstStep?.question;
+  const flowHint = task.taskType === "题目讲解" ? "我会先按几个小问题听你拆题。" : "我会先按几个小问题一点点听你讲。";
+
+  if (firstQuestion) {
+    if (task.materialContext) {
+      return `我已经看过你上传的学习材料了，但还没有真正学会${quotedTopic}。\n\n${flowHint}先从第一步开始：${firstQuestion}`;
+    }
+
+    if (task.taskType === "题目讲解") {
+      return `我有一些基础，但还不会这道题。\n\n${flowHint}先从第一步开始：${firstQuestion}`;
+    }
+
+    return `我有一些基础，但还没真正学会${quotedTopic}。\n\n${flowHint}先从第一步开始：${firstQuestion}`;
+  }
 
   if (task.materialContext) {
     return `我已经看过你上传的学习材料了，但我还没有真正学会${quotedTopic}。\n\n请你先用自己的话讲一下这份材料里最核心的知识点。`;
@@ -1946,7 +2189,37 @@ function renderSessionSummary() {
       ${escapeHtml(state.task.taskType)}
     </div>
   `;
+  renderLearningRoadmap();
   renderLectureTopicBanner();
+}
+
+function renderLearningRoadmap() {
+  if (!elements.learningRoadmap) return;
+  const roadmap = normalizeClientRoadmap(state.task?.learningRoadmap);
+
+  if (!roadmap.length) {
+    elements.learningRoadmap.innerHTML = `<p class="muted">暂无拆解路径。</p>`;
+    return;
+  }
+
+  elements.learningRoadmap.innerHTML = `
+    <ol>
+      ${roadmap
+        .map(
+          (item, index) => `
+            <li>
+              <span class="roadmap-index">${index + 1}</span>
+              <div>
+                <strong>${escapeHtml(item.title)}</strong>
+                <p>${escapeHtml(item.question)}</p>
+                ${item.focus ? `<small>${escapeHtml(item.focus)}</small>` : ""}
+              </div>
+            </li>
+          `,
+        )
+        .join("")}
+    </ol>
+  `;
 }
 
 function renderLectureTopicBanner() {
@@ -2610,12 +2883,22 @@ function setBusy(isBusy, message = "AI 学生正在思考...") {
   elements.loadingState.hidden = !isBusy;
   elements.loadingState.textContent = message;
   elements.submitReplyButton.disabled = isBusy;
+  elements.hintButton.disabled = isBusy;
+  elements.skipButton.disabled = isBusy;
   elements.reportButton.disabled = isBusy;
   elements.voiceToolButton.disabled = isBusy;
   elements.formulaToolButton.disabled = isBusy;
   elements.imageToolButton.disabled = isBusy;
   elements.taskVoiceToolButton.disabled = isBusy;
   updateSaveButtons();
+}
+
+function setSetupBusy(isBusy, message = "") {
+  elements.createStudentButton.disabled = isBusy;
+  elements.taskVoiceToolButton.disabled = isBusy;
+  elements.taskFormulaToolButton.disabled = isBusy;
+  elements.taskImageToolButton.disabled = isBusy;
+  if (message) showSaveNotice(message);
 }
 
 function showError(message) {
@@ -2671,6 +2954,7 @@ function resetSession() {
   elements.replyInput.value = "";
   elements.conversation.innerHTML = "";
   elements.lectureTopicBanner.innerHTML = "";
+  elements.learningRoadmap.innerHTML = `<p class="muted">创建后会显示 AI 大概要追问的几个小问题。</p>`;
   elements.focusList.innerHTML = `<p class="muted">暂无观察。</p>`;
   elements.reportPanel.innerHTML = "";
   stopVoiceInput({ focusTarget: false, keepStatus: true });

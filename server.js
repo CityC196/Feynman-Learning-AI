@@ -123,6 +123,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/api/roadmap" && request.method === "POST") {
+      const payload = await readJson(request);
+      const result = await createLearningRoadmap(payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
     if (url.pathname === "/api/report" && request.method === "POST") {
       const payload = await readJson(request);
       const result = await createReport(payload);
@@ -172,15 +179,51 @@ server.listen(PORT, () => {
   console.log(`AI费曼教室 local server running at http://localhost:${PORT}`);
 });
 
+async function createLearningRoadmap(payload) {
+  assertApiKey();
+  const task = normalizeTask(payload.task);
+
+  const response = await callZhipu(
+    [
+      { role: "system", content: buildRoadmapSystemPrompt(task) },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            task,
+            instruction:
+              "请把这个学习任务拆成 AI 学生接下来大概要追问的几个小问题。问题要具体、可回答，不要写成“介绍一下某某”。",
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    { maxTokens: 1100 },
+  );
+
+  const parsed = parseJsonObject(response);
+  const roadmap = normalizeRoadmapItems(parsed.roadmap);
+  return {
+    overview: stringOrDefault(parsed.overview, ""),
+    roadmap: roadmap.length ? roadmap : buildFallbackRoadmap(task),
+  };
+}
+
 async function createFollowUp(payload) {
   assertApiKey();
   const task = normalizeTask(payload.task);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const observations = Array.isArray(payload.observations) ? payload.observations : [];
   const latest = String(payload.latestExplanation || "").trim();
+  const controlAction = normalizeControlAction(payload.controlAction);
 
-  if (!latest) {
+  if (!latest && !controlAction.type) {
     throw httpError(400, "讲解内容不能为空。");
+  }
+
+  if (controlAction.type === "hint") {
+    return createHintResponse({ task, messages, observations });
   }
 
   const response = await callZhipu([
@@ -193,6 +236,7 @@ async function createFollowUp(payload) {
           activeObservations: observations.filter((item) => item.status !== "resolved").slice(-8),
           recentDialogue: messages.slice(-10),
           latestExplanation: latest,
+          controlAction,
         },
         null,
         2,
@@ -201,15 +245,60 @@ async function createFollowUp(payload) {
   ]);
 
   const parsed = parseJsonObject(response);
+  const normalizedObservations = normalizeObservations(parsed.observations);
   return {
     assistantText:
       typeof parsed.assistantText === "string" && parsed.assistantText.trim()
         ? parsed.assistantText.trim()
         : "我还有些地方没有完全听懂。你能把关键概念、推导依据和物理意义再拆开讲一遍吗？",
-    observations: normalizeObservations(parsed.observations),
+    observations: filterControlActionObservations(normalizedObservations, controlAction.type),
     resolvedObservationIds: Array.isArray(parsed.resolvedObservationIds)
       ? parsed.resolvedObservationIds.map(String)
       : [],
+  };
+}
+
+async function createHintResponse({ task, messages, observations }) {
+  const activeObservations = observations.filter((item) => item.status !== "resolved").slice(-6);
+  const latestAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
+  const currentQuestion =
+    activeObservations
+      .map((item) => item.question || item.description)
+      .filter(Boolean)
+      .at(-1) ||
+    latestAssistant?.text ||
+    task.taskContent;
+
+  const response = await callZhipu(
+    [
+      { role: "system", content: buildHintSystemPrompt(task) },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            task,
+            activeObservations,
+            recentDialogue: messages.slice(-8),
+            currentQuestion,
+            instruction:
+              "用户点击了“提示”。请直接给当前小问题的必要讲解或提示，然后问一个确认掌握的小问题。",
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    { maxTokens: 1200 },
+  );
+
+  const parsed = parseJsonObject(response);
+  return {
+    assistantText:
+      typeof parsed.assistantText === "string" && parsed.assistantText.trim()
+        ? parsed.assistantText.trim()
+        : buildFallbackHintText(task, currentQuestion),
+    observations: normalizeObservations(parsed.observations),
+    resolvedObservationIds: [],
   };
 }
 
@@ -714,6 +803,49 @@ async function extractPdfPageImages(pdfBuffer, maxPages) {
   }
 }
 
+function buildRoadmapSystemPrompt(task) {
+  const modeRule =
+    task.taskType === "题目讲解"
+      ? [
+          "用户给的是一道题或一个解题任务。拆解应围绕：题意拆解、已知未知、建模依据、公式条件、步骤衔接、结果解释。",
+          "每个问题都要能让用户直接开口回答，不要要求用户一次讲完整道题。",
+        ].join("\n")
+      : [
+          "用户给的是一个知识点，可能很大，例如“导数”或几页 PDF 的主题。拆解应围绕：解决什么问题、定义/公式、符号和条件、直观理解、推导或来源、应用步骤、边界情况。",
+          "如果知识点很宽泛，要把第一个问题设计得很小，比如先问“它描述什么关系”或“最核心公式是什么”，不要问“请介绍一下”。",
+        ].join("\n");
+
+  return [
+    "你是 AI费曼教室的学习流程拆解助手。",
+    "你的任务是把用户要讲给 AI 学生听的主题拆成 4-7 个循序渐进的小问题，用来展示给用户一个基本学习流程图。",
+    "这些问题不是课程讲义，也不是标准答案；它们是 AI 学生大概要追问用户的路径。",
+    modeRule,
+    "问题必须具体、短、可回答。禁止输出“介绍一下/讲一下/说说这个知识点”这类宽泛问法。",
+    "优先使用用户给出的主题词和材料上下文；没有材料时按通用学习路径拆解。",
+    "必须只输出 JSON 对象，不要 Markdown，不要代码块。",
+    'JSON 结构：{"overview":"一句话说明拆解思路","roadmap":[{"title":"步骤标题，2-8字","question":"AI 学生会问用户的具体小问题","focus":"这一步主要检查什么"}]}',
+  ].join("\n");
+}
+
+function buildHintSystemPrompt(task) {
+  const modeRule =
+    task.taskType === "题目讲解"
+      ? "提示要帮助用户继续解题，但不能直接给完整标准解法。优先提示题意拆解、建模变量、公式依据或下一步该检查的条件。"
+      : "提示要帮助用户理解当前知识点，但不能替用户讲完整课程。优先提示定义、核心公式、符号含义、直观图像、适用条件或一个最小例子。";
+
+  return [
+    "你是 AI费曼教室的提示模式助手。",
+    "用户点击“提示”，说明当前 AI 学生问到的小问题用户也卡住了。你的任务是给一个短提示，再用一个小问题确认用户是否掌握。",
+    "不要说“你给的提示”“我听懂了你的提示”。用户没有给提示，是在向你请求提示。",
+    "提示控制在 2-5 句，面向大一到大二理工科学生，必须具体到当前问题。",
+    "不要输出完整证明、完整题解或长篇讲义；只给用户重新开口讲解所需的关键抓手。",
+    modeRule,
+    "最后一句必须是确认问题，例如“你能用自己的话把这个定义里的极限过程复述一遍吗？”",
+    "必须只输出 JSON 对象，不要 Markdown，不要代码块。",
+    'JSON 结构：{"assistantText":"短提示 + 一个确认掌握的小问题","observations":[{"type":"提示后确认|概念漏洞|逻辑跳跃|公式条件|直观含义|前置知识|表达含混|题意建模","description":"提示后仍需要用户确认的具体点","question":"用户下一步要回答的小问题"}],"resolvedObservationIds":[]}',
+  ].join("\n");
+}
+
 function buildChatSystemPrompt(task) {
   const modeRule =
     task.taskType === "题目讲解"
@@ -740,9 +872,16 @@ function buildChatSystemPrompt(task) {
     "# 你会收到的输入",
     "task：课程、模式和当前主题。",
     "task.materialContext：如果用户上传或粘贴了图片/PDF 学习材料，这里会包含材料中的关键知识点、公式、条件和自测问题。你可以据此追问，但不要直接替用户讲完。",
+    "task.learningRoadmap：如果存在，这是当前主题拆解后的学习流程图。你要优先沿着这些小问题追问，避免宽泛地让用户“介绍一下”。",
     "activeObservations：之前仍未解决的观察点，可能带有 id。",
     "recentDialogue：最近几轮用户和 AI 学生的对话。",
     "latestExplanation：用户最新一轮讲解，这是本轮判断的主要依据。",
+    "controlAction：如果用户点击了界面按钮，这里会说明动作类型。type=skip 表示用户认为当前问题太简单、已掌握；type=hint 表示用户也卡住了，需要你先给提示。",
+    "",
+    "# 按钮动作处理",
+    "如果 controlAction.type 是 skip：把用户当作已经掌握当前小问题。latestExplanation 只是界面动作，不是用户讲解内容；不要检查它缺了什么，不要把“跳过/未讲”记录成理解漏洞。把相关 activeObservations 视为已经解决，直接进入学习流程图里的下一个小问题，或问一个更深一点的应用/边界问题。",
+    "如果 controlAction.type 是 hint：用户是在向你要提示，不是已经给了提示。assistantText 必须先直接给 2-5 句必要讲解或提示，围绕 activeObservations 或最近一个 AI 问题说明关键抓手；不要说“你给的提示”。不要展开成长篇标准答案；最后必须提出一个很小的确认问题，让用户根据提示复述或应用。",
+    "如果不是按钮动作，按正常费曼追问流程处理。",
     "",
     "# 每轮处理流程",
     "1. 先判断 latestExplanation 是否修正了 activeObservations 中的问题；如果修正了，把对应 id 放入 resolvedObservationIds，并在 assistantText 中自然承认这部分变清楚了。",
@@ -753,6 +892,9 @@ function buildChatSystemPrompt(task) {
     "",
     "# 追问策略",
     modeRule,
+    "面对很大的主题（例如“导数”“高斯定理”“几页 PDF 内容”），不要问“请介绍一下这个知识点”。要拆成小问题：先问它解决什么问题，再问核心公式/定义，再问符号条件、直观解释和应用边界。",
+    "每次只问一个主问题，问题要让用户知道从哪里开口，例如“公式里的 Q 指的是哪一部分电荷？”比“讲讲高斯定理”更好。",
+    "如果 task.learningRoadmap 存在，优先选择其中还没有被最近对话覆盖的小问题继续推进。",
     "每轮优先追问一个主问题，最多保留 1-3 个 observations。",
     "observations 只放本轮仍需要继续追问的问题；已经解决的问题只放入 resolvedObservationIds。",
     "如果没有发现新的明显漏洞，observations 返回空数组，并在 assistantText 中请用户举例、讲证明思路或解释应用场景。",
@@ -761,6 +903,8 @@ function buildChatSystemPrompt(task) {
     "",
     "# 输出格式",
     "必须只输出 JSON 对象，不要 Markdown，不要代码块。",
+    "controlAction.type=skip 时，resolvedObservationIds 尽量包含被跳过的当前 activeObservations 的 id；observations 只能记录下一步新问题本身，不允许出现“用户跳过了、尚未讲、没有说明”这类把跳过当成漏洞的描述。",
+    "controlAction.type=hint 时，observations 可以保留当前待确认问题，不要把用户点击提示当作已经掌握。",
     'JSON 结构：{"assistantText":"AI 学生对用户的自然语言回应，包含具体追问","observations":[{"type":"概念漏洞|逻辑跳跃|公式条件|直观含义|前置知识|表达含混|题意建模","description":"本轮发现的具体问题","question":"下一步最需要用户回答的问题"}],"resolvedObservationIds":["本轮已经被用户修正的问题 id，没有则空数组"]}',
   ].join("\n");
 }
@@ -1611,12 +1755,85 @@ function normalizeLatexText(value) {
     .replace(/\u0008/g, "\\b");
 }
 
+function normalizeControlAction(value) {
+  if (!value || typeof value !== "object") return { type: "" };
+  const type = String(value.type || "").trim().toLowerCase();
+  if (!["skip", "hint"].includes(type)) return { type: "" };
+  return {
+    type,
+    resolvedObservationIds: Array.isArray(value.resolvedObservationIds)
+      ? value.resolvedObservationIds.map(String).filter(Boolean).slice(0, 12)
+      : [],
+  };
+}
+
+function normalizeRoadmapItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      if (typeof item === "string") {
+        const text = item.trim();
+        return {
+          title: text,
+          question: text,
+          focus: "",
+        };
+      }
+
+      return {
+        title: stringOrDefault(item?.title || item?.name, ""),
+        question: stringOrDefault(item?.question || item?.feynmanQuestion || item?.description, ""),
+        focus: stringOrDefault(item?.focus || item?.explanation, ""),
+      };
+    })
+    .filter((item) => item.title || item.question)
+    .map((item, index) => ({
+      title: item.title || `第 ${index + 1} 步`,
+      question: item.question || item.title,
+      focus: item.focus,
+    }))
+    .slice(0, 7);
+}
+
+function buildFallbackRoadmap(task) {
+  const topic = stringOrDefault(task?.taskContent, "这个主题").replace(/[「」]/g, "").slice(0, 40);
+  if (task?.taskType === "题目讲解") {
+    return [
+      { title: "题意拆解", question: "这道题要求什么，已知条件和未知量分别是什么？", focus: "先把问题对象讲清楚。" },
+      { title: "建模依据", question: "你准备选哪些变量、坐标或方程，为什么可以这样建模？", focus: "检查建模不是直接套公式。" },
+      { title: "公式条件", question: "用到的公式或定理需要哪些适用条件？题目里满足了吗？", focus: "防止公式依据缺失。" },
+      { title: "步骤衔接", question: "从上一步到下一步，中间省略了哪条推理？", focus: "把计算链条补完整。" },
+      { title: "结果解释", question: "最后结果的单位、方向、范围或物理意义合理吗？", focus: "回到题目检查答案。" },
+    ];
+  }
+
+  return [
+    { title: "问题定位", question: `${topic}主要想解决什么问题，或者描述什么关系？`, focus: "先说它为什么会被提出。" },
+    { title: "核心表述", question: `${topic}的定义、基本公式或定理表述是什么？`, focus: "用一句准确的话立住概念。" },
+    { title: "符号条件", question: "公式里的量分别代表什么，它在什么条件下才能用？", focus: "拆清变量、对象和适用范围。" },
+    { title: "直观理解", question: "如果暂时不用公式，你会怎样直观解释它为什么合理？", focus: "检验是否只是背了形式。" },
+    { title: "简单应用", question: `遇到一个具体例子时，你会怎样判断能不能用${topic}，第一步做什么？`, focus: "把概念落到操作步骤。" },
+  ];
+}
+
+function buildFallbackHintText(task, currentQuestion) {
+  const topic = stringOrDefault(task?.taskContent, "这个主题").replace(/[「」]/g, "").slice(0, 40);
+  const question = stringOrDefault(currentQuestion, "");
+  if (task?.taskType === "题目讲解") {
+    return `我先给你一个提示：先别急着列式，把题目里的已知量、未知量和适用条件分开写。然后再看你准备用的公式，逐项对应到题目条件里。针对刚才这个问题：${question || "你能先说出这道题的已知量和未知量吗？"}`;
+  }
+
+  return `我先给你一个抓手：讲${topic}时，可以先说它解决的关系，再给出最核心的定义或公式，最后解释公式里的符号和适用条件。不要一开始铺开全部内容，先把一个最小定义讲准。针对刚才这个问题，你能用自己的话说出${topic}的核心定义或公式吗？`;
+}
+
 function normalizeTask(task) {
   return {
     courseName: stringOrDefault(task?.courseName, "未命名学科"),
     taskType: task?.taskType === "题目讲解" ? "题目讲解" : "知识点讲解",
     taskContent: stringOrDefault(task?.taskContent, "当前主题"),
     materialContext: stringOrDefault(task?.materialContext, "").slice(0, 5000),
+    roadmapOverview: stringOrDefault(task?.roadmapOverview, "").slice(0, 800),
+    learningRoadmap: normalizeRoadmapItems(task?.learningRoadmap),
   };
 }
 
@@ -1632,6 +1849,14 @@ function normalizeObservations(items) {
     }))
     .filter((item) => item.description || item.question)
     .slice(0, 4);
+}
+
+function filterControlActionObservations(items, actionType) {
+  if (actionType !== "skip") return items;
+  return items.filter((item) => {
+    const text = `${item.description || ""}\n${item.question || ""}`;
+    return !/跳过|尚未|未给出|没有说明|没有讲|缺少讲解/.test(text);
+  });
 }
 
 function isSupportedImageDataUrl(value) {

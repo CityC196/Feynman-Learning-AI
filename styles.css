@@ -945,6 +945,73 @@ button:disabled {
   gap: 10px;
 }
 
+.roadmap-flow {
+  margin-top: 6px;
+}
+
+.roadmap-flow ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.roadmap-flow li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  border: 1px solid var(--soft-line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #ffffff;
+}
+
+.roadmap-flow li + li::before {
+  content: "";
+  position: absolute;
+  top: -9px;
+  left: 23px;
+  width: 1px;
+  height: 8px;
+  background: var(--line);
+}
+
+.roadmap-index {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.roadmap-flow strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 13px;
+}
+
+.roadmap-flow p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.roadmap-flow small {
+  display: block;
+  margin-top: 4px;
+  color: var(--teal-dark);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .focus-card {
   display: grid;
   gap: 7px;
