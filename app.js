@@ -266,6 +266,7 @@ function startSessionFromTask(task, introText = "") {
     ...task,
     learningRoadmap: learningRoadmap.length ? learningRoadmap : buildFallbackRoadmap(task),
   };
+  ensureRoadmapProgress();
   state.messages = [{ role: "assistant", text: introText || buildIntroMessage(state.task), turn: 0 }];
   state.observations = [];
   state.report = null;
@@ -308,7 +309,7 @@ async function addMaterialToCurrentDialogue(material) {
       latestExplanation: explanation,
     });
 
-    mergeObservations(filterControlActionObservations(result.observations || [], type), result.resolvedObservationIds || []);
+    mergeObservations(result.observations || [], result.resolvedObservationIds || []);
     state.messages.push({
       role: "assistant",
       text: result.assistantText || material.starterQuestion,
@@ -351,6 +352,7 @@ async function submitReply(event) {
     });
 
     mergeObservations(result.observations || [], result.resolvedObservationIds || []);
+    updateRoadmapProgressAfterAiResponse(result.observations || []);
     state.messages.push({
       role: "assistant",
       text: result.assistantText,
@@ -390,6 +392,7 @@ async function sendControlAction({ type, visibleText, busyMessage }) {
   clearError();
   appendUserMessage(visibleText);
   const resolvedObservationIds = type === "skip" ? resolveActiveObservations() : [];
+  if (type === "skip") completeCurrentRoadmapStep();
   setBusy(true, busyMessage);
 
   try {
@@ -404,7 +407,7 @@ async function sendControlAction({ type, visibleText, busyMessage }) {
       },
     });
 
-    mergeObservations(result.observations || [], result.resolvedObservationIds || []);
+    mergeObservations(filterControlActionObservations(result.observations || [], type), result.resolvedObservationIds || []);
     state.messages.push({
       role: "assistant",
       text: result.assistantText,
@@ -495,6 +498,75 @@ function filterControlActionObservations(items, actionType) {
     const text = `${item?.description || ""}\n${item?.question || ""}`;
     return !/跳过|尚未|未给出|没有说明|没有讲|缺少讲解/.test(text);
   });
+}
+
+function ensureRoadmapProgress() {
+  if (!state.task) return;
+  const roadmap = normalizeClientRoadmap(state.task.learningRoadmap);
+  const completedIndexes = normalizeRoadmapCompletedIndexes(state.task.roadmapProgress?.completedIndexes, roadmap.length);
+  let currentIndex = Number(state.task.roadmapProgress?.currentIndex);
+
+  if (!Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= roadmap.length || completedIndexes.includes(currentIndex)) {
+    currentIndex = roadmap.findIndex((_, index) => !completedIndexes.includes(index));
+  }
+
+  state.task = {
+    ...state.task,
+    learningRoadmap: roadmap,
+    roadmapProgress: {
+      currentIndex,
+      completedIndexes,
+    },
+  };
+}
+
+function normalizeRoadmapCompletedIndexes(items, roadmapLength) {
+  if (!Array.isArray(items)) return [];
+  return Array.from(
+    new Set(
+      items
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item >= 0 && item < roadmapLength),
+    ),
+  ).sort((left, right) => left - right);
+}
+
+function getRoadmapProgress() {
+  ensureRoadmapProgress();
+  return state.task?.roadmapProgress || { currentIndex: -1, completedIndexes: [] };
+}
+
+function completeCurrentRoadmapStep() {
+  if (!state.task) return;
+  ensureRoadmapProgress();
+  const roadmap = normalizeClientRoadmap(state.task.learningRoadmap);
+  const currentIndex = state.task.roadmapProgress?.currentIndex;
+  if (!roadmap.length || !Number.isInteger(currentIndex) || currentIndex < 0) return;
+
+  const completedIndexes = normalizeRoadmapCompletedIndexes(
+    [...(state.task.roadmapProgress?.completedIndexes || []), currentIndex],
+    roadmap.length,
+  );
+  const nextIndex = roadmap.findIndex((_, index) => !completedIndexes.includes(index));
+
+  state.task = {
+    ...state.task,
+    roadmapProgress: {
+      currentIndex: nextIndex,
+      completedIndexes,
+    },
+  };
+  renderLearningRoadmap();
+  saveSession();
+}
+
+function updateRoadmapProgressAfterAiResponse(newObservations) {
+  const unresolvedNewItems = Array.isArray(newObservations)
+    ? newObservations.filter((item) => item?.description || item?.question)
+    : [];
+  if (!unresolvedNewItems.length) {
+    completeCurrentRoadmapStep();
+  }
 }
 
 function resolveActiveObservations() {
@@ -1664,6 +1736,7 @@ function mergeTaskMaterialContext(material) {
     materialContext: [existing, incoming].filter(Boolean).join("\n\n--- 补充材料 ---\n").slice(0, 5000),
     learningRoadmap: existingRoadmap.length ? existingRoadmap : incomingRoadmap,
   };
+  ensureRoadmapProgress();
   renderSessionSummary();
   renderLectureTopicBanner();
   saveSession();
@@ -2196,6 +2269,8 @@ function renderSessionSummary() {
 function renderLearningRoadmap() {
   if (!elements.learningRoadmap) return;
   const roadmap = normalizeClientRoadmap(state.task?.learningRoadmap);
+  const progress = getRoadmapProgress();
+  const completedSet = new Set(progress.completedIndexes);
 
   if (!roadmap.length) {
     elements.learningRoadmap.innerHTML = `<p class="muted">暂无拆解路径。</p>`;
@@ -2205,18 +2280,22 @@ function renderLearningRoadmap() {
   elements.learningRoadmap.innerHTML = `
     <ol>
       ${roadmap
-        .map(
-          (item, index) => `
-            <li>
+        .map((item, index) => {
+          const completed = completedSet.has(index);
+          const active = !completed && index === progress.currentIndex;
+          const statusLabel = completed ? "已通过" : active ? "当前" : "待提问";
+
+          return `
+            <li class="${completed ? "completed" : active ? "active" : ""}" title="${escapeHtml(statusLabel)}">
               <span class="roadmap-index">${index + 1}</span>
               <div>
-                <strong>${escapeHtml(item.title)}</strong>
+                <strong>${escapeHtml(item.title)}<span class="roadmap-status">${escapeHtml(statusLabel)}</span></strong>
                 <p>${escapeHtml(item.question)}</p>
                 ${item.focus ? `<small>${escapeHtml(item.focus)}</small>` : ""}
               </div>
             </li>
-          `,
-        )
+          `;
+        })
         .join("")}
     </ol>
   `;

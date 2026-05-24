@@ -873,6 +873,7 @@ function buildChatSystemPrompt(task) {
     "task：课程、模式和当前主题。",
     "task.materialContext：如果用户上传或粘贴了图片/PDF 学习材料，这里会包含材料中的关键知识点、公式、条件和自测问题。你可以据此追问，但不要直接替用户讲完。",
     "task.learningRoadmap：如果存在，这是当前主题拆解后的学习流程图。你要优先沿着这些小问题追问，避免宽泛地让用户“介绍一下”。",
+    "task.roadmapProgress：如果存在，currentIndex 表示下一步应推进的流程图条目，completedIndexes 表示已经通过或跳过的条目。不要再追问 completedIndexes 对应的问题。",
     "activeObservations：之前仍未解决的观察点，可能带有 id。",
     "recentDialogue：最近几轮用户和 AI 学生的对话。",
     "latestExplanation：用户最新一轮讲解，这是本轮判断的主要依据。",
@@ -894,7 +895,7 @@ function buildChatSystemPrompt(task) {
     modeRule,
     "面对很大的主题（例如“导数”“高斯定理”“几页 PDF 内容”），不要问“请介绍一下这个知识点”。要拆成小问题：先问它解决什么问题，再问核心公式/定义，再问符号条件、直观解释和应用边界。",
     "每次只问一个主问题，问题要让用户知道从哪里开口，例如“公式里的 Q 指的是哪一部分电荷？”比“讲讲高斯定理”更好。",
-    "如果 task.learningRoadmap 存在，优先选择其中还没有被最近对话覆盖的小问题继续推进。",
+    "如果 task.learningRoadmap 存在，优先选择 task.roadmapProgress.currentIndex 对应的小问题继续推进；如果 currentIndex 不可用，再选择还没有被最近对话覆盖的小问题。",
     "每轮优先追问一个主问题，最多保留 1-3 个 observations。",
     "observations 只放本轮仍需要继续追问的问题；已经解决的问题只放入 resolvedObservationIds。",
     "如果没有发现新的明显漏洞，observations 返回空数组，并在 assistantText 中请用户举例、讲证明思路或解释应用场景。",
@@ -1827,13 +1828,36 @@ function buildFallbackHintText(task, currentQuestion) {
 }
 
 function normalizeTask(task) {
+  const learningRoadmap = normalizeRoadmapItems(task?.learningRoadmap);
   return {
     courseName: stringOrDefault(task?.courseName, "未命名学科"),
     taskType: task?.taskType === "题目讲解" ? "题目讲解" : "知识点讲解",
     taskContent: stringOrDefault(task?.taskContent, "当前主题"),
     materialContext: stringOrDefault(task?.materialContext, "").slice(0, 5000),
     roadmapOverview: stringOrDefault(task?.roadmapOverview, "").slice(0, 800),
-    learningRoadmap: normalizeRoadmapItems(task?.learningRoadmap),
+    learningRoadmap,
+    roadmapProgress: normalizeRoadmapProgress(task?.roadmapProgress, learningRoadmap.length),
+  };
+}
+
+function normalizeRoadmapProgress(progress, roadmapLength) {
+  const completedIndexes = Array.isArray(progress?.completedIndexes)
+    ? Array.from(
+        new Set(
+          progress.completedIndexes
+            .map((item) => Number(item))
+            .filter((item) => Number.isInteger(item) && item >= 0 && item < roadmapLength),
+        ),
+      ).sort((left, right) => left - right)
+    : [];
+  let currentIndex = Number(progress?.currentIndex);
+  if (!Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= roadmapLength || completedIndexes.includes(currentIndex)) {
+    currentIndex = Array.from({ length: roadmapLength }, (_, index) => index).find((index) => !completedIndexes.includes(index));
+  }
+
+  return {
+    currentIndex: Number.isInteger(currentIndex) ? currentIndex : -1,
+    completedIndexes,
   };
 }
 
