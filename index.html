@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI费曼教室</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260523-voice-overlap-1s" />
   </head>
   <body>
     <div class="app-shell main-app-shell">
@@ -93,6 +93,7 @@
                   <div class="reply-input-header">
                     <label id="taskContentLabel" for="taskContent">知识点</label>
                     <div class="input-tools" aria-label="主题输入辅助工具">
+                      <button id="taskVoiceToolButton" class="tool-button voice-tool-button" type="button" aria-pressed="false">语音</button>
                       <button id="taskFormulaToolButton" class="tool-button" type="button">公式</button>
                       <button id="taskImageToolButton" class="tool-button" type="button">识别图片</button>
                     </div>
@@ -103,6 +104,7 @@
                     rows="6"
                     placeholder="如：弯矩与正应力关系"
                   ></textarea>
+                  <div id="taskVoiceStatus" class="voice-status" hidden aria-live="polite"></div>
                 </div>
               </div>
 
@@ -166,11 +168,13 @@
                 <div class="reply-input-header">
                   <label for="replyInput">你的讲解</label>
                   <div class="input-tools" aria-label="讲解输入辅助工具">
+                    <button id="voiceToolButton" class="tool-button voice-tool-button" type="button" aria-pressed="false">语音</button>
                     <button id="formulaToolButton" class="tool-button" type="button">公式</button>
                     <button id="imageToolButton" class="tool-button" type="button">识别图片</button>
                   </div>
                 </div>
                 <textarea id="replyInput" rows="5" placeholder="输入讲解内容"></textarea>
+                <div id="voiceStatus" class="voice-status" hidden aria-live="polite"></div>
                 <div id="loadingState" class="loading-state" hidden>AI 学生正在思考...</div>
                 <div id="errorState" class="error-state" hidden></div>
                 <div class="button-row">
@@ -403,6 +407,6 @@
     </div>
 
     <script src="./node_modules/mathlive/mathlive.min.js"></script>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260523-voice-overlap-1s"></script>
   </body>
 </html>

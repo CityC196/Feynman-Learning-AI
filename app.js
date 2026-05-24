@@ -49,8 +49,10 @@ const elements = {
   courseName: document.querySelector("#courseName"),
   taskContent: document.querySelector("#taskContent"),
   taskContentLabel: document.querySelector("#taskContentLabel"),
+  taskVoiceToolButton: document.querySelector("#taskVoiceToolButton"),
   taskFormulaToolButton: document.querySelector("#taskFormulaToolButton"),
   taskImageToolButton: document.querySelector("#taskImageToolButton"),
+  taskVoiceStatus: document.querySelector("#taskVoiceStatus"),
   conceptModeCard: document.querySelector("#conceptModeCard"),
   problemModeCard: document.querySelector("#problemModeCard"),
   sessionSummary: document.querySelector("#sessionSummary"),
@@ -58,8 +60,10 @@ const elements = {
   conversation: document.querySelector("#conversation"),
   replyForm: document.querySelector("#replyForm"),
   replyInput: document.querySelector("#replyInput"),
+  voiceToolButton: document.querySelector("#voiceToolButton"),
   formulaToolButton: document.querySelector("#formulaToolButton"),
   imageToolButton: document.querySelector("#imageToolButton"),
+  voiceStatus: document.querySelector("#voiceStatus"),
   submitReplyButton: document.querySelector("#submitReplyButton"),
   reportButton: document.querySelector("#reportButton"),
   saveReportButton: document.querySelector("#saveReportButton"),
@@ -117,6 +121,34 @@ const elements = {
 let saveNoticeTimer = 0;
 let activeInsertTarget = null;
 let feedbackImageDataUrls = [];
+const VOICE_CHUNK_MS = 1000;
+const VOICE_MIN_CHUNK_MS = 300;
+const VOICE_OVERLAP_MS = 300;
+const VOICE_TARGET_SAMPLE_RATE = 16000;
+const VOICE_LOCAL_FALLBACK_MS = 4500;
+const voiceState = {
+  mode: "idle",
+  isListening: false,
+  targetInput: null,
+  recognition: null,
+  localResults: [],
+  localHadText: false,
+  localFallbackTimer: 0,
+  stream: null,
+  audioContext: null,
+  source: null,
+  processor: null,
+  buffers: [],
+  overlapSamples: new Float32Array(0),
+  sampleRate: 0,
+  flushTimer: 0,
+  chunkIndex: 0,
+  pendingRequests: 0,
+  transcriptChunks: new Map(),
+  draftStart: 0,
+  draftEnd: 0,
+  draftText: "",
+};
 
 elements.taskForm.addEventListener("submit", startSession);
 elements.replyForm.addEventListener("submit", submitReply);
@@ -131,8 +163,10 @@ elements.saveReportButton.addEventListener("click", () => saveCurrentToLibrary({
 elements.continueButton.addEventListener("click", continueLecture);
 elements.taskForm.addEventListener("input", updateSetupPreview);
 elements.taskForm.addEventListener("change", updateSetupPreview);
+elements.taskVoiceToolButton.addEventListener("click", () => toggleVoiceInput(elements.taskContent));
 elements.taskFormulaToolButton.addEventListener("click", () => openFormulaModal(elements.taskContent));
 elements.taskImageToolButton.addEventListener("click", () => openImageModal(elements.taskContent));
+elements.voiceToolButton.addEventListener("click", () => toggleVoiceInput(elements.replyInput));
 elements.formulaToolButton.addEventListener("click", () => openFormulaModal(elements.replyInput));
 elements.imageToolButton.addEventListener("click", () => openImageModal(elements.replyInput));
 elements.insertFormulaButton.addEventListener("click", insertFormula);
@@ -167,8 +201,11 @@ document
   .querySelectorAll('input[name="libraryFilter"]')
   .forEach((input) => input.addEventListener("change", updateLibraryFilter));
 
-function startSession(event) {
+initializeVoiceInput();
+
+async function startSession(event) {
   event.preventDefault();
+  if (voiceState.isListening) await stopVoiceInput({ focusTarget: false });
   const form = new FormData(elements.taskForm);
   const task = {
     courseName: sanitize(form.get("courseName")) || "未命名学科",
@@ -199,6 +236,7 @@ function startSession(event) {
 async function submitReply(event) {
   event.preventDefault();
   if (state.busy) return;
+  if (voiceState.isListening) await stopVoiceInput({ focusTarget: false });
 
   const explanation = sanitize(elements.replyInput.value);
   if (!explanation) {
@@ -238,6 +276,7 @@ async function submitReply(event) {
 
 async function finishSession() {
   if (state.busy) return;
+  if (voiceState.isListening) await stopVoiceInput({ focusTarget: false });
   if (!state.messages.some((message) => message.role === "user")) {
     flashMissingInput([elements.replyInput]);
     elements.replyInput.focus();
@@ -303,7 +342,617 @@ function mergeObservations(newItems, resolvedIds) {
   state.observations.push(...incoming.filter((item) => item.description || item.question));
 }
 
+function initializeVoiceInput() {
+  updateVoiceButtons();
+  const hint = canUseNativeSpeechInput() || canCaptureMicrophone()
+    ? "语音输入"
+    : "当前浏览器无法访问麦克风，建议使用 Chrome / Edge 或手机系统键盘听写";
+  elements.taskVoiceToolButton.title = hint;
+  elements.voiceToolButton.title = hint;
+}
+
+function canUseNativeSpeechInput() {
+  return Boolean(getSpeechRecognitionConstructor());
+}
+
+function canCaptureMicrophone() {
+  return Boolean(navigator.mediaDevices?.getUserMedia && (window.AudioContext || window.webkitAudioContext));
+}
+
+function getSpeechRecognitionConstructor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+async function toggleVoiceInput(targetInput) {
+  if (state.busy) return;
+
+  if (voiceState.isListening && voiceState.targetInput === targetInput) {
+    await stopVoiceInput();
+    return;
+  }
+
+  await startVoiceInput(targetInput);
+}
+
+async function startVoiceInput(targetInput) {
+  if (!canUseNativeSpeechInput() && !canCaptureMicrophone()) {
+    showVoiceStatus(targetInput, "当前浏览器无法访问麦克风。可以直接点输入框，用手机键盘或系统听写输入。", true);
+    targetInput.focus();
+    return;
+  }
+
+  if (!window.isSecureContext && !["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+    showVoiceStatus(targetInput, "语音输入需要 HTTPS 或 localhost 环境。", true);
+    targetInput.focus();
+    return;
+  }
+
+  if (voiceState.isListening) {
+    await stopVoiceInput({ focusTarget: false, keepStatus: true });
+  }
+
+  hideVoiceStatus(elements.taskContent);
+  hideVoiceStatus(elements.replyInput);
+  resetVoiceSession(targetInput);
+  activeInsertTarget = targetInput;
+
+  await startServerVoiceCapture(targetInput);
+}
+
+function startNativeSpeechInput(targetInput, SpeechRecognition) {
+  try {
+    const recognition = new SpeechRecognition();
+    recognition.lang = getSpeechLanguage();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      voiceState.mode = "native";
+      voiceState.isListening = true;
+      updateVoiceButtons();
+      showVoiceStatus(targetInput, "正在尝试浏览器自带语音输入，文字会同步显示。 ");
+      voiceState.localFallbackTimer = window.setTimeout(() => {
+        if (voiceState.mode === "native" && voiceState.isListening && !voiceState.localHadText) {
+          switchToServerVoiceCapture(targetInput).catch((error) => showVoiceStatus(targetInput, error.message, true));
+        }
+      }, VOICE_LOCAL_FALLBACK_MS);
+    };
+
+    recognition.onresult = (event) => handleNativeSpeechResult(event, targetInput);
+
+    recognition.onerror = (event) => {
+      if (["not-allowed", "service-not-allowed"].includes(event.error)) {
+        stopNativeRecognition();
+        voiceState.mode = "idle";
+        voiceState.isListening = false;
+        updateVoiceButtons();
+        showVoiceStatus(targetInput, getNativeSpeechErrorMessage(event.error), true);
+        return;
+      }
+
+      if (!voiceState.localHadText) {
+        switchToServerVoiceCapture(targetInput).catch((error) => showVoiceStatus(targetInput, error.message, true));
+      } else {
+        showVoiceStatus(targetInput, getNativeSpeechErrorMessage(event.error), true);
+      }
+    };
+
+    recognition.onend = () => {
+      if (voiceState.mode !== "native") return;
+      window.clearTimeout(voiceState.localFallbackTimer);
+      voiceState.localFallbackTimer = 0;
+      voiceState.recognition = null;
+      voiceState.isListening = false;
+      voiceState.mode = "idle";
+      updateVoiceButtons();
+      showVoiceStatus(targetInput, "语音输入已停止。可以继续编辑后提交。 ");
+    };
+
+    voiceState.recognition = recognition;
+    recognition.start();
+    return true;
+  } catch {
+    stopNativeRecognition();
+    return false;
+  }
+}
+
+async function switchToServerVoiceCapture(targetInput) {
+  if (voiceState.mode !== "native") return;
+  stopNativeRecognition();
+  voiceState.mode = "server-starting";
+  voiceState.isListening = false;
+  updateVoiceButtons();
+  showVoiceStatus(targetInput, "浏览器自带语音没有返回文字，已切换到后端转写兜底。 ");
+  await startServerVoiceCapture(targetInput);
+}
+
+async function startServerVoiceCapture(targetInput) {
+  if (!canCaptureMicrophone()) {
+    voiceState.mode = "idle";
+    voiceState.isListening = false;
+    updateVoiceButtons();
+    showVoiceStatus(targetInput, "当前浏览器无法访问麦克风。可以直接点输入框，用手机键盘或系统听写输入。", true);
+    targetInput.focus();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const audioContext = new AudioContext();
+    if (audioContext.state === "suspended") await audioContext.resume();
+
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (event) => {
+      if (voiceState.mode !== "server" || !voiceState.isListening) return;
+      const input = event.inputBuffer.getChannelData(0);
+      voiceState.buffers.push(new Float32Array(input));
+    };
+
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+
+    voiceState.stream = stream;
+    voiceState.audioContext = audioContext;
+    voiceState.source = source;
+    voiceState.processor = processor;
+    voiceState.sampleRate = audioContext.sampleRate;
+    voiceState.mode = "server";
+    voiceState.isListening = true;
+    voiceState.flushTimer = window.setInterval(() => {
+      flushVoiceChunk().catch((error) => showVoiceStatus(targetInput, error.message, true));
+    }, VOICE_CHUNK_MS);
+
+    updateVoiceButtons();
+    showVoiceStatus(targetInput, "正在语音输入。 ");
+    targetInput.focus();
+  } catch (error) {
+    cleanupVoiceCapture();
+    clearVoiceDraft();
+    updateVoiceButtons();
+    showVoiceStatus(targetInput, getMicrophoneErrorMessage(error), true);
+    targetInput.focus();
+  }
+}
+
+async function stopVoiceInput(options = {}) {
+  const targetInput = voiceState.targetInput;
+  if (!voiceState.isListening && !voiceState.pendingRequests) return;
+
+  if (voiceState.mode === "native") {
+    voiceState.isListening = false;
+    stopNativeRecognition();
+    voiceState.mode = "idle";
+    updateVoiceButtons();
+    if (targetInput && !options.keepStatus) {
+      showVoiceStatus(targetInput, "语音输入已停止。可以继续编辑后提交。 ");
+    }
+    if (options.focusTarget !== false && targetInput) targetInput.focus();
+    return;
+  }
+
+  voiceState.isListening = false;
+  voiceState.mode = "server-stopping";
+  window.clearInterval(voiceState.flushTimer);
+  voiceState.flushTimer = 0;
+  cleanupVoiceCapture();
+  updateVoiceButtons();
+
+  await flushVoiceChunk({ force: true });
+  voiceState.mode = "idle";
+  if (targetInput && !options.keepStatus && voiceState.pendingRequests === 0) {
+    showVoiceStatus(targetInput, "语音输入已停止。可以继续编辑后提交。 ");
+  }
+
+  if (options.focusTarget !== false && targetInput) {
+    targetInput.focus();
+  }
+}
+
+function handleNativeSpeechResult(event, targetInput) {
+  for (let index = event.resultIndex; index < event.results.length; index += 1) {
+    const result = event.results[index];
+    voiceState.localResults[index] = {
+      text: result[0]?.transcript || "",
+      isFinal: Boolean(result.isFinal),
+    };
+  }
+  voiceState.localResults.length = Math.max(voiceState.localResults.length, event.results.length);
+
+  const finalText = voiceState.localResults
+    .filter((item) => item?.isFinal)
+    .map((item) => item.text)
+    .join("");
+  const interimText = voiceState.localResults
+    .filter((item) => item && !item.isFinal)
+    .map((item) => item.text)
+    .join("");
+  const text = normalizeSpeechTranscript(`${finalText}${interimText}`);
+
+  if (!text) return;
+  voiceState.localHadText = true;
+  window.clearTimeout(voiceState.localFallbackTimer);
+  voiceState.localFallbackTimer = 0;
+  renderSpeechTranscript(targetInput, text);
+  showVoiceStatus(
+    targetInput,
+    interimText ? `正在识别：${normalizeSpeechTranscript(interimText)}` : "已同步写入，继续说即可。 ",
+  );
+}
+
+function stopNativeRecognition() {
+  window.clearTimeout(voiceState.localFallbackTimer);
+  voiceState.localFallbackTimer = 0;
+  const recognition = voiceState.recognition;
+  voiceState.recognition = null;
+  if (!recognition) return;
+  recognition.onstart = null;
+  recognition.onresult = null;
+  recognition.onerror = null;
+  recognition.onend = null;
+  try {
+    recognition.stop();
+  } catch {
+    try {
+      recognition.abort();
+    } catch {
+      // Already stopped.
+    }
+  }
+}
+
+function getSpeechLanguage() {
+  const language = navigator.language || "zh-CN";
+  return language.toLowerCase().startsWith("zh") ? language : "zh-CN";
+}
+
+function getNativeSpeechErrorMessage(errorCode) {
+  const messages = {
+    "audio-capture": "没有检测到可用麦克风，请检查设备或系统权限。",
+    "not-allowed": "麦克风权限被拒绝。请在浏览器地址栏里允许麦克风后再试。",
+    "service-not-allowed": "浏览器没有允许当前页面使用语音识别。请检查权限或换用后端转写。",
+    "no-speech": "没有听到声音，正在准备后端转写兜底。",
+    network: "浏览器自带语音识别暂时不可用，正在准备后端转写兜底。",
+    aborted: "语音输入已停止。",
+  };
+  return messages[errorCode] || "浏览器自带语音识别中断。";
+}
+function resetVoiceSession(input) {
+  voiceState.targetInput = input;
+  voiceState.mode = "idle";
+  voiceState.localResults = [];
+  voiceState.localHadText = false;
+  voiceState.buffers = [];
+  voiceState.overlapSamples = new Float32Array(0);
+  voiceState.sampleRate = 0;
+  voiceState.chunkIndex = 0;
+  voiceState.pendingRequests = 0;
+  voiceState.transcriptChunks = new Map();
+  voiceState.draftStart = input.selectionStart ?? input.value.length;
+  voiceState.draftEnd = input.selectionEnd ?? input.value.length;
+  voiceState.draftText = "";
+}
+
+function cleanupVoiceCapture() {
+  if (voiceState.processor) {
+    voiceState.processor.onaudioprocess = null;
+    try {
+      voiceState.processor.disconnect();
+    } catch {
+      // Already disconnected.
+    }
+  }
+  if (voiceState.source) {
+    try {
+      voiceState.source.disconnect();
+    } catch {
+      // Already disconnected.
+    }
+  }
+  if (voiceState.stream) {
+    voiceState.stream.getTracks().forEach((track) => track.stop());
+  }
+  if (voiceState.audioContext && voiceState.audioContext.state !== "closed") {
+    voiceState.audioContext.close().catch(() => {});
+  }
+
+  voiceState.stream = null;
+  voiceState.audioContext = null;
+  voiceState.source = null;
+  voiceState.processor = null;
+}
+
+function clearVoiceDraft() {
+  voiceState.mode = "idle";
+  stopNativeRecognition();
+  voiceState.targetInput = null;
+  voiceState.localResults = [];
+  voiceState.localHadText = false;
+  voiceState.buffers = [];
+  voiceState.overlapSamples = new Float32Array(0);
+  voiceState.pendingRequests = 0;
+  voiceState.transcriptChunks = new Map();
+  voiceState.draftStart = 0;
+  voiceState.draftEnd = 0;
+  voiceState.draftText = "";
+}
+
+async function flushVoiceChunk(options = {}) {
+  const targetInput = voiceState.targetInput;
+  const sampleRate = voiceState.sampleRate;
+  const buffers = voiceState.buffers;
+  if (!targetInput || !sampleRate || !buffers.length) return;
+
+  voiceState.buffers = [];
+  const currentSamples = flattenAudioBuffers(buffers);
+  const sampleCount = currentSamples.length;
+  const durationMs = (sampleCount / sampleRate) * 1000;
+  if (!options.force && durationMs < VOICE_MIN_CHUNK_MS) {
+    voiceState.buffers.unshift(...buffers);
+    return;
+  }
+
+  const chunkIndex = voiceState.chunkIndex;
+  voiceState.chunkIndex += 1;
+  const audioSamples = prependAudioSamples(voiceState.overlapSamples, currentSamples);
+  voiceState.overlapSamples = getTailAudioSamples(currentSamples, sampleRate, VOICE_OVERLAP_MS);
+  const audioDataUrl = encodeWavDataUrlFromSamples(audioSamples, sampleRate);
+  voiceState.pendingRequests += 1;
+  try {
+    const result = await postJson("/api/transcribe", {
+      audioDataUrl,
+      task: getVoiceTaskContext(),
+      prompt: buildVoicePrompt(),
+    });
+    const text = sanitize(result?.text);
+    if (text) {
+      voiceState.transcriptChunks.set(chunkIndex, text);
+      renderVoiceTranscript(targetInput);
+      if (!voiceState.isListening) showVoiceStatus(targetInput, "语音输入已停止。可以继续编辑后提交。 ");
+    }
+  } catch (error) {
+    showVoiceStatus(targetInput, error.message || "语音转文字失败，请稍后再试。", true);
+  } finally {
+    voiceState.pendingRequests = Math.max(0, voiceState.pendingRequests - 1);
+    if (!voiceState.isListening && voiceState.pendingRequests === 0) {
+      updateVoiceButtons();
+    }
+  }
+}
+
+function renderVoiceTranscript(input) {
+  const text = Array.from(voiceState.transcriptChunks.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map((entry) => normalizeSpeechTranscript(entry[1]))
+    .reduce((combined, chunk) => appendTranscriptChunk(combined, chunk), "");
+  renderSpeechTranscript(input, text);
+}
+
+function appendTranscriptChunk(combined, chunk) {
+  if (!chunk) return combined;
+  if (!combined) return chunk;
+
+  const maxOverlap = Math.min(24, combined.length, chunk.length);
+  for (let length = maxOverlap; length >= 2; length -= 1) {
+    if (combined.slice(-length) === chunk.slice(0, length)) {
+      return combined + chunk.slice(length);
+    }
+  }
+  return combined + chunk;
+}
+
+function renderSpeechTranscript(input, transcript) {
+  const text = normalizeSpeechTranscript(transcript);
+  const start = Math.min(voiceState.draftStart, input.value.length);
+  const end = Math.min(Math.max(voiceState.draftEnd, start), input.value.length);
+  const before = input.value.slice(0, start);
+  const after = input.value.slice(end);
+  const spacer = getSpeechSpacer(before, text);
+  const draftText = text ? `${spacer}${text}` : "";
+
+  input.value = `${before}${draftText}${after}`;
+  voiceState.draftStart = start;
+  voiceState.draftEnd = start + draftText.length;
+  voiceState.draftText = draftText;
+
+  const cursor = voiceState.draftEnd;
+  input.focus();
+  input.setSelectionRange(cursor, cursor);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  if (input === elements.taskContent) updateSetupPreview();
+}
+
+function normalizeSpeechTranscript(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function getSpeechSpacer(before, text) {
+  if (!before || !text || /\s$/.test(before)) return "";
+  if (/^[,.;:!?，。；：！？、）)\]}】》”]/.test(text)) return "";
+  if (/[（([\[{《“]$/.test(before)) return "";
+  if (/[A-Za-z0-9]$/.test(before) && /^[A-Za-z0-9]/.test(text)) return " ";
+  return "";
+}
+
+function getVoiceTaskContext() {
+  if (voiceState.targetInput !== elements.taskContent && state.task) return state.task;
+  return {
+    courseName: sanitize(elements.courseName.value) || "未命名学科",
+    taskType: getSelectedTaskType(),
+    taskContent: sanitize(elements.taskContent.value) || "当前主题",
+  };
+}
+
+function buildVoicePrompt() {
+  const task = getVoiceTaskContext();
+  return [
+    "这是 AI费曼教室中的学生讲题或讲知识点语音。",
+    `学科：${task.courseName}`,
+    `模式：${task.taskType}`,
+    `主题：${task.taskContent}`,
+    "请按中文学习讲解场景转写，保留公式、变量名、英文术语和常见理工科词汇。",
+  ].join("\n");
+}
+
+function encodeWavDataUrl(buffers, inputSampleRate) {
+  return encodeWavDataUrlFromSamples(flattenAudioBuffers(buffers), inputSampleRate);
+}
+
+function encodeWavDataUrlFromSamples(sourceSamples, inputSampleRate) {
+  const samples = downsampleAudioBuffer(sourceSamples, inputSampleRate, VOICE_TARGET_SAMPLE_RATE);
+  const wavBytes = encodePcmWav(samples, VOICE_TARGET_SAMPLE_RATE);
+  return `data:audio/wav;base64,${uint8ToBase64(wavBytes)}`;
+}
+
+function prependAudioSamples(prefixSamples, sourceSamples) {
+  if (!prefixSamples?.length) return sourceSamples;
+  const output = new Float32Array(prefixSamples.length + sourceSamples.length);
+  output.set(prefixSamples, 0);
+  output.set(sourceSamples, prefixSamples.length);
+  return output;
+}
+
+function getTailAudioSamples(samples, sampleRate, durationMs) {
+  const length = Math.max(0, Math.round((sampleRate * durationMs) / 1000));
+  if (!length || !samples.length) return new Float32Array(0);
+  if (samples.length <= length) return samples.slice();
+  return samples.slice(samples.length - length);
+}
+
+function flattenAudioBuffers(buffers) {
+  const length = buffers.reduce((total, item) => total + item.length, 0);
+  const output = new Float32Array(length);
+  let offset = 0;
+  buffers.forEach((buffer) => {
+    output.set(buffer, offset);
+    offset += buffer.length;
+  });
+  return output;
+}
+
+function downsampleAudioBuffer(buffer, inputSampleRate, outputSampleRate) {
+  if (outputSampleRate === inputSampleRate) return buffer;
+  const ratio = inputSampleRate / outputSampleRate;
+  const outputLength = Math.max(1, Math.round(buffer.length / ratio));
+  const output = new Float32Array(outputLength);
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.min(Math.floor((index + 1) * ratio), buffer.length);
+    let sum = 0;
+    let count = 0;
+    for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
+      sum += buffer[sourceIndex];
+      count += 1;
+    }
+    output[index] = count ? sum / count : 0;
+  }
+
+  return output;
+}
+
+function encodePcmWav(samples, sampleRate) {
+  const bytesPerSample = 2;
+  const blockAlign = bytesPerSample;
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+  const view = new DataView(buffer);
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, samples.length * bytesPerSample, true);
+
+  let offset = 44;
+  samples.forEach((sample) => {
+    const value = Math.max(-1, Math.min(1, sample));
+    view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+    offset += bytesPerSample;
+  });
+
+  return new Uint8Array(buffer);
+}
+
+function writeAscii(view, offset, text) {
+  for (let index = 0; index < text.length; index += 1) {
+    view.setUint8(offset + index, text.charCodeAt(index));
+  }
+}
+
+function uint8ToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return window.btoa(binary);
+}
+
+function getMicrophoneErrorMessage(error) {
+  if (error?.name === "NotAllowedError" || error?.name === "PermissionDeniedError") {
+    return "麦克风权限被拒绝。请在浏览器地址栏里允许麦克风后再试。";
+  }
+  if (error?.name === "NotFoundError") {
+    return "没有检测到可用麦克风，请检查设备或系统权限。";
+  }
+  if (error?.name === "NotReadableError") {
+    return "麦克风正被其他应用占用，请关闭占用后再试。";
+  }
+  return error?.message || "麦克风启动失败，请稍后再试。";
+}
+
+function getVoiceControls(targetInput) {
+  const isTaskInput = targetInput === elements.taskContent;
+  return {
+    button: isTaskInput ? elements.taskVoiceToolButton : elements.voiceToolButton,
+    status: isTaskInput ? elements.taskVoiceStatus : elements.voiceStatus,
+  };
+}
+
+function updateVoiceButtons() {
+  [elements.taskContent, elements.replyInput].forEach((targetInput) => {
+    const { button } = getVoiceControls(targetInput);
+    const isActive = voiceState.isListening && voiceState.targetInput === targetInput;
+    button.classList.toggle("active", isActive);
+    button.textContent = isActive ? "停止" : "语音";
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    button.title = isActive ? "停止语音输入" : "语音输入";
+  });
+}
+
+function showVoiceStatus(targetInput, message, isError = false) {
+  const { status } = getVoiceControls(targetInput);
+  status.textContent = message;
+  status.hidden = false;
+  status.classList.toggle("error", isError);
+}
+
+function hideVoiceStatus(targetInput) {
+  const { status } = getVoiceControls(targetInput);
+  status.hidden = true;
+  status.textContent = "";
+  status.classList.remove("error");
+}
+
 function openFormulaModal(targetInput = elements.replyInput) {
+  if (voiceState.isListening) stopVoiceInput({ focusTarget: false });
   activeInsertTarget = targetInput;
   clearError();
   updateModalCopy();
@@ -360,6 +1009,7 @@ function hideMathKeyboard() {
 }
 
 function openImageModal(targetInput = elements.replyInput) {
+  if (voiceState.isListening) stopVoiceInput({ focusTarget: false });
   activeInsertTarget = targetInput;
   clearError();
   updateModalCopy();
@@ -1746,8 +2396,10 @@ function setBusy(isBusy, message = "AI 学生正在思考...") {
   elements.loadingState.textContent = message;
   elements.submitReplyButton.disabled = isBusy;
   elements.reportButton.disabled = isBusy;
+  elements.voiceToolButton.disabled = isBusy;
   elements.formulaToolButton.disabled = isBusy;
   elements.imageToolButton.disabled = isBusy;
+  elements.taskVoiceToolButton.disabled = isBusy;
   updateSaveButtons();
 }
 
@@ -1806,6 +2458,9 @@ function resetSession() {
   elements.lectureTopicBanner.innerHTML = "";
   elements.focusList.innerHTML = `<p class="muted">暂无观察。</p>`;
   elements.reportPanel.innerHTML = "";
+  stopVoiceInput({ focusTarget: false, keepStatus: true });
+  hideVoiceStatus(elements.taskContent);
+  hideVoiceStatus(elements.replyInput);
   closeFormulaModal();
   closeImageModal();
   resetImageRecognition();

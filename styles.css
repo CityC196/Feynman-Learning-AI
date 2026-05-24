@@ -887,6 +887,29 @@ textarea:focus {
   color: var(--teal-dark);
 }
 
+.tool-button.active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.voice-status {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--mint);
+  color: var(--teal-dark);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.voice-status.error {
+  border-color: #e5afa7;
+  background: var(--coral-soft);
+  color: #7c2f26;
+}
+
 .reply-form .button-row {
   margin-top: 2px;
 }

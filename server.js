@@ -10,10 +10,14 @@ const PORT = Number(process.env.PORT || 5173);
 const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY;
 const ZHIPU_MODEL = process.env.ZHIPU_MODEL || "glm-4-flash-250414";
 const ZHIPU_VISION_MODEL = process.env.ZHIPU_VISION_MODEL || "glm-4.5v";
+const ZHIPU_ASR_MODEL = process.env.ZHIPU_ASR_MODEL || "glm-asr-2512";
 const ZHIPU_ENDPOINT =
   process.env.ZHIPU_ENDPOINT || "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const ZHIPU_ASR_ENDPOINT =
+  process.env.ZHIPU_ASR_ENDPOINT || "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions";
 const MAX_JSON_BYTES = Number(process.env.MAX_JSON_BYTES || 50_000_000);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIO_BYTES = Number(process.env.MAX_AUDIO_BYTES || 5 * 1024 * 1024);
 const MAX_FEEDBACK_IMAGES = 6;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DATA_FILE = process.env.DATA_FILE || path.join(DATA_DIR, "research-store.json");
@@ -22,6 +26,8 @@ const PRIVACY_CONSENT_VERSION = process.env.PRIVACY_CONSENT_VERSION || "2026-05-
 const ALLOWED_ORIGINS = parseCsv(process.env.ALLOWED_ORIGINS || "");
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 10 * 60 * 1000);
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 120);
+const TRANSCRIBE_RATE_LIMIT_WINDOW_MS = Number(process.env.TRANSCRIBE_RATE_LIMIT_WINDOW_MS || RATE_LIMIT_WINDOW_MS);
+const TRANSCRIBE_RATE_LIMIT_MAX = Number(process.env.TRANSCRIBE_RATE_LIMIT_MAX || 900);
 const HSTS_HEADER = process.env.HSTS_HEADER || "max-age=31536000; includeSubDomains";
 const store = loadDataStore();
 const rateLimitBuckets = new Map();
@@ -52,7 +58,7 @@ const server = http.createServer(async (request, response) => {
 
   try {
     if (url.pathname.startsWith("/api/") && request.method !== "OPTIONS") {
-      enforceRateLimit(request);
+      enforceRateLimit(request, url.pathname);
     }
 
     if (url.pathname === "/api/health") {
@@ -122,6 +128,13 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/recognize-image" && request.method === "POST") {
       const payload = await readJson(request);
       const result = await createImageRecognition(payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/transcribe" && request.method === "POST") {
+      const payload = await readJson(request);
+      const result = await createAudioTranscription(payload);
       sendJson(response, 200, result);
       return;
     }
@@ -270,6 +283,64 @@ async function createImageRecognition(payload) {
   };
 }
 
+async function createAudioTranscription(payload) {
+  assertApiKey();
+  const audioDataUrl = String(payload.audioDataUrl || "").trim();
+  const prompt = String(payload.prompt || "").trim().slice(0, 8000);
+
+  if (!isSupportedAudioDataUrl(audioDataUrl)) {
+    throw httpError(400, "请录入 wav 格式的语音片段。 ");
+  }
+
+  const base64Audio = audioDataUrl.split(",")[1] || "";
+  const approxBytes = Math.ceil(base64Audio.length * 0.75);
+  if (approxBytes > MAX_AUDIO_BYTES) {
+    throw httpError(413, "语音片段过大，请缩短后再试。 ");
+  }
+
+  const audioBlob = new Blob([Buffer.from(base64Audio, "base64")], { type: "audio/wav" });
+  const form = new FormData();
+  form.set("model", ZHIPU_ASR_MODEL);
+  form.set("stream", "false");
+  form.set("file", audioBlob, "speech.wav");
+  form.set("request_id", crypto.randomUUID());
+  if (prompt) form.set("prompt", prompt);
+
+  const response = await fetch(ZHIPU_ASR_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ZHIPU_API_KEY}`,
+    },
+    body: form,
+  });
+
+  const body = await response.text();
+  if (!response.ok) {
+    let detail = body;
+    try {
+      const errorBody = JSON.parse(body);
+      detail = errorBody?.error?.message || errorBody?.message || body;
+    } catch {
+      // Keep raw response text.
+    }
+    throw httpError(response.status, `语音转文字失败：${detail}`);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw httpError(502, "语音转文字服务返回了无法解析的响应。 ");
+  }
+
+  return {
+    text: stringOrDefault(parsed.text, ""),
+  };
+}
+
+function isSupportedAudioDataUrl(value) {
+  return /^data:audio\/wav(?:;[^,]*)?;base64,/i.test(value);
+}
 function buildChatSystemPrompt(task) {
   const modeRule =
     task.taskType === "题目讲解"
@@ -950,20 +1021,39 @@ function setSecurityHeaders(response) {
   }
 }
 
-function enforceRateLimit(request) {
-  const key = getClientIp(request);
+function enforceRateLimit(request, pathname = "") {
+  const limits = getRateLimitConfig(pathname);
+  const key = `${limits.bucketName}:${getClientIp(request)}`;
   const now = Date.now();
   const bucket = rateLimitBuckets.get(key);
 
   if (!bucket || now > bucket.resetAt) {
-    rateLimitBuckets.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    rateLimitBuckets.set(key, { count: 1, resetAt: now + limits.windowMs });
     return;
   }
 
   bucket.count += 1;
-  if (bucket.count > RATE_LIMIT_MAX) {
-    throw httpError(429, "请求过于频繁，请稍后再试。");
+  if (bucket.count > limits.max) {
+    throw httpError(429, limits.message);
   }
+}
+
+function getRateLimitConfig(pathname) {
+  if (pathname === "/api/transcribe") {
+    return {
+      bucketName: "transcribe",
+      max: TRANSCRIBE_RATE_LIMIT_MAX,
+      windowMs: TRANSCRIBE_RATE_LIMIT_WINDOW_MS,
+      message: "语音转写请求过于频繁，请暂停一会儿再试。",
+    };
+  }
+
+  return {
+    bucketName: "api",
+    max: RATE_LIMIT_MAX,
+    windowMs: RATE_LIMIT_WINDOW_MS,
+    message: "请求过于频繁，请稍后再试。",
+  };
 }
 
 function getClientIp(request) {
